@@ -1,51 +1,57 @@
-# simple-tunnel
+# Proxy Tunnel
 
-A lightweight HTTP listener that forwards traffic to an HTTPS proxy, enabling JetBrains IDEs to work with HTTPS-only corporate proxies.
+Multi-module Java proxies that forward local HTTP(S) traffic through an upstream HTTPS proxy. Pick the module that fits your needs:
+- [`simple-tunnel`](simple-tunnel/README.md): lightweight HTTP proxy using Java 21 virtual threads.
+- [`nio-tunnel`](nio-tunnel/README.md): high-performance Netty-based HTTP & SOCKS5 proxy with PAC support.
 
-## Features
-- Java 21 virtual threads for highly concurrent proxying
-- Configuration via `config.properties` with CLI overrides (e.g. `--listen.port=9999`)
-- Optional Basic authentication on both inbound listener and upstream proxy
-- Runnable fat JAR created with Maven Shade
+## Requirements
+- JDK 21+
+- Maven 3.8+
+
+## Build
+Run Maven from the module you want:
+```bash
+mvn -pl simple-tunnel clean package
+mvn -pl nio-tunnel clean package
+```
+Artifacts land under each module's `target/` (fat JAR via Maven Shade).
 
 ## Quick Start
-1. Adjust `src/main/resources/config.properties` or place a custom file next to the JAR.
-2. Build the executable JAR:
-   ```bash
-   mvn -pl simple-tunnel clean package
-   ```
-3. Run it:
-   ```bash
-   java -jar target/simple-tunnel-1.0-SNAPSHOT.jar --upstream.host=myproxy.company.com
-   ```
+### simple-tunnel (HTTP only)
+1) Adjust `simple-tunnel/src/main/resources/config.properties` (or place a file next to the JAR).
+2) Build, then run:
+```bash
+java -jar simple-tunnel/target/simple-tunnel-1.0-SNAPSHOT.jar --upstream.host=myproxy.company.com
+```
+3) Point your IDE/browser at `http://127.0.0.1:8282` (set auth if `listen.username`/`listen.password` is configured).
 
-## Configuration
-| Property | Description | Default |
-| --- | --- | --- |
-| `listen.host` | Local bind address | `127.0.0.1` |
-| `listen.port` | Local port JetBrains will talk to | `8282` |
-| `listen.username`/`listen.password` | Require Basic auth from IDE | empty (disabled) |
-| `upstream.host` | **Required** HTTPS proxy hostname | (none) |
-| `upstream.port` | Upstream proxy port | `443` |
-| `upstream.tls` | Use TLS to talk to upstream | `true` |
-| `upstream.username`/`upstream.password` | Basic auth for upstream | empty (disabled) |
-| `timeouts.connectMillis` | Upstream connect timeout | `10000` |
-| `timeouts.readMillis` | Socket read timeout | `60000` |
-| `buffer.size` | Pipe buffer size | `16384` |
-| `header.maxBytes` | Max request/response header bytes | `32768` |
-| `log.level` | `ERROR`/`WARN`/`INFO`/`DEBUG` | `INFO` |
-| `server.name` | Name shown in responses | `simple-tunnel` |
+### nio-tunnel (HTTP + SOCKS5 + PAC)
+1) Update `nio-tunnel/src/main/resources/config.properties` as needed.
+2) Build, then run:
+```bash
+java -jar nio-tunnel/target/nio-tunnel-1.0-SNAPSHOT.jar --upstream.host=myproxy.company.com
+```
+3) Use `http://127.0.0.1:8383` for HTTP proxy, `127.0.0.1:1080` for SOCKS5, PAC at `http://127.0.0.1:8383/proxy.pac`.
 
-CLI flags mirror property names using `--key=value`. `--config=path` loads an extra properties file after the defaults.
+## Configuration Highlights
+Common properties (both modules) live in each module's `config.properties` and support CLI overrides (`--key=value`). Key fields:
+- `listen.host` / `listen.port`: local bind address and port.
+- `upstream.host` / `upstream.port`: required upstream HTTPS proxy location.
+- `upstream.tls`: enable TLS to the upstream (default true).
+- Optional Basic auth on listener and upstream via `*.username`/`*.password`.
 
-## JetBrains Setup
-1. Start simple-tunnel.
-2. In IDE: Settings → Appearance & Behavior → System Settings → HTTP Proxy.
-3. Choose **Manual proxy configuration**, enter `http://127.0.0.1:8282` (or your custom host/port).
-4. If you set `listen.username`/`listen.password`, enter them under Proxy authentication.
+Module-specific:
+- `simple-tunnel`: timeouts, buffer size, log level, server name.
+- `nio-tunnel`: SOCKS5 listener port, HTTP max header size, PAC options, Netty timeouts.
 
-## Notes
-- The proxy currently forwards standard HTTP requests via tunnel; CONNECT requests can be added similarly.
-- The JVM trust store controls HTTPS verification. Customize via standard `javax.net.ssl.trustStore` flags if needed.
-- For troubleshooting, run with `--log.level=DEBUG` and watch stdout.
+## Choosing a Module
+- Use `simple-tunnel` when you need a small HTTP-only bridge for JetBrains IDEs.
+- Use `nio-tunnel` for higher concurrency, SOCKS5 support, and PAC generation/serving.
 
+## Repository Layout
+- [`simple-tunnel/`](simple-tunnel/README.md) – virtual-thread HTTP proxy and docs.
+- [`nio-tunnel/`](nio-tunnel/README.md) – Netty-based HTTP+SOCKS5 proxy and docs.
+- `LICENSE` – project license.
+
+## License
+See `LICENSE`.

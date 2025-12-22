@@ -1,0 +1,70 @@
+#!/usr/bin/env sh
+# simple-tunnel startup script for Linux/macOS
+# Mirrors simple-tunnel.bat behavior: background start + app.log.
+
+set -eu
+
+APP_NAME="simple-tunnel"
+
+# Directory where this script resides
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$SCRIPT_DIR"
+
+# Prefer a jar named simple-tunnel.jar next to this script (like the .bat),
+# otherwise fall back to Maven target output.
+JAR_FILE="$SCRIPT_DIR/$APP_NAME.jar"
+if [ ! -f "$JAR_FILE" ]; then
+  # Pick the newest jar under target/ (excluding original- jars from shade)
+  JAR_CANDIDATE=$(ls -1t "$SCRIPT_DIR"/target/*.jar 2>/dev/null | grep -v '/original-' | head -n 1 || true)
+  if [ -n "${JAR_CANDIDATE:-}" ] && [ -f "$JAR_CANDIDATE" ]; then
+    JAR_FILE="$JAR_CANDIDATE"
+  fi
+fi
+
+JAVA_OPTS="${JAVA_OPTS:--Xmx64m -Xms16m}"
+LOG_FILE="$SCRIPT_DIR/app.log"
+
+# If SIMPLE_TUNNEL_JAVA is set, use it. Otherwise, prefer JAVA_HOME/bin/java, then java in PATH.
+JAVA_BIN="${SIMPLE_TUNNEL_JAVA:-}"
+if [ -z "$JAVA_BIN" ]; then
+  if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+    JAVA_BIN="$JAVA_HOME/bin/java"
+  else
+    JAVA_BIN=$(command -v java || true)
+  fi
+fi
+
+if [ -z "$JAVA_BIN" ] || [ ! -x "$JAVA_BIN" ]; then
+  echo "Java not found. Set JAVA_HOME or ensure 'java' is on PATH." >&2
+  echo "Current directory: $(pwd)" >&2
+  echo "JAR file path: $JAR_FILE" >&2
+  exit 1
+fi
+
+if [ ! -f "$JAR_FILE" ]; then
+  echo "JAR file not found: $JAR_FILE" >&2
+  echo "Current directory: $(pwd)" >&2
+  exit 1
+fi
+
+echo "Current directory: $(pwd)"
+echo "JAR file: $JAR_FILE"
+echo "Engaging $APP_NAME..."
+
+{
+  echo "cost: $(date)"
+  echo "Current directory: $(pwd)"
+  echo "JAR file path: $JAR_FILE"
+} >> "$LOG_FILE"
+
+# Start in background and detach from terminal. Write PID file for convenience.
+PID_FILE="$SCRIPT_DIR/$APP_NAME.pid"
+
+# shellcheck disable=SC2086
+nohup "$JAVA_BIN" $JAVA_OPTS -jar "$JAR_FILE" >> "$LOG_FILE" 2>&1 &
+PID=$!
+echo "$PID" > "$PID_FILE"
+
+echo "$APP_NAME started (pid=$PID)"
+echo "Log file: $LOG_FILE"
+

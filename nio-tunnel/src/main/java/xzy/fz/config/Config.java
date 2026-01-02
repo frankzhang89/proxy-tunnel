@@ -35,7 +35,10 @@ import java.nio.file.Path;
  * @param pacHost                  Host to use in generated PAC file
  * @param pacFile                  Optional path to custom PAC file
  * @param serverName               Server name for HTTP headers
- * @param logFile                  Optional log file path
+ * @param logFile                  Optional log file path (deprecated, use accessLogFile)
+ * @param accessLogFile            Access log file path (Squid-style format)
+ * @param accessLogConsole         Whether to output access log to console
+ * @param accessLogEnabled         Whether access logging is enabled
  */
 public record Config(
         String listenHost,
@@ -54,7 +57,10 @@ public record Config(
         String pacHost,
         String pacFile,
         String serverName,
-        String logFile
+        String logFile,
+        String accessLogFile,
+        boolean accessLogConsole,
+        boolean accessLogEnabled
 ) {
     private static final Logger log = LoggerFactory.getLogger(Config.class);
 

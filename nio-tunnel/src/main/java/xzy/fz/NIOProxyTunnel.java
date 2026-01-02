@@ -18,6 +18,7 @@ import xzy.fz.config.Config;
 import xzy.fz.config.ConfigLoader;
 import xzy.fz.handler.HttpProxyHandler;
 import xzy.fz.handler.Socks5Handler;
+import xzy.fz.log.AccessLog;
 
 import javax.net.ssl.SSLException;
 import java.util.concurrent.TimeUnit;
@@ -132,6 +133,9 @@ public final class NIOProxyTunnel {
         /** SSL context for upstream HTTPS connections */
         private final SslContext sslContext;
 
+        /** Access log for Squid-style request logging */
+        private final AccessLog accessLog;
+
         /**
          * Creates a new tunnel server with the given configuration.
          *
@@ -141,6 +145,13 @@ public final class NIOProxyTunnel {
             this.config = config;
             this.bossGroup = new NioEventLoopGroup(1);
             this.workerGroup = new NioEventLoopGroup();
+
+            // Initialize access log if enabled
+            if (config.accessLogEnabled()) {
+                this.accessLog = new AccessLog(config.accessLogFile(), config.accessLogConsole());
+            } else {
+                this.accessLog = null;
+            }
 
             // Build SSL context for upstream HTTPS proxy connections
             try {
@@ -217,7 +228,7 @@ public final class NIOProxyTunnel {
                             p.addLast("http-encoder", new HttpResponseEncoder());
 
                             // Our custom HTTP proxy handler
-                            p.addLast("http-proxy-handler", new HttpProxyHandler(config, sslContext));
+                            p.addLast("http-proxy-handler", new HttpProxyHandler(config, sslContext, accessLog));
                         }
                     });
 
@@ -250,7 +261,7 @@ public final class NIOProxyTunnel {
                             p.addLast("socks-unification", new SocksPortUnificationServerHandler());
 
                             // Our custom SOCKS5 handler
-                            p.addLast("socks5-handler", new Socks5Handler(config, sslContext));
+                            p.addLast("socks5-handler", new Socks5Handler(config, sslContext, accessLog));
                         }
                     });
 
@@ -264,6 +275,12 @@ public final class NIOProxyTunnel {
          */
         void shutdown() {
             log.info("Shutting down nio-tunnel...");
+
+            // Close access log
+            if (accessLog != null) {
+                accessLog.close();
+            }
+
             // Graceful shutdown with timeout (0 quiet period, 5 second timeout)
             bossGroup.shutdownGracefully(0, 5, TimeUnit.SECONDS);
             workerGroup.shutdownGracefully(0, 5, TimeUnit.SECONDS);

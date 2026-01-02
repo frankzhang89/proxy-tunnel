@@ -9,6 +9,7 @@ import io.netty.handler.codec.http.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
+import xzy.fz.log.AccessLog;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -40,6 +41,9 @@ public class HttpForwardHandler extends SimpleChannelInboundHandler<FullHttpResp
     private final ChannelHandlerContext clientCtx;
     private final HttpRequest originalRequest;
     private final Config config;
+    private final AccessLog accessLog;
+    private final long startTime;
+    private final String clientAddress;
 
     /**
      * Creates a new HTTP forward handler.
@@ -47,11 +51,18 @@ public class HttpForwardHandler extends SimpleChannelInboundHandler<FullHttpResp
      * @param clientCtx       Client channel context
      * @param originalRequest Original HTTP request from client
      * @param config          Proxy configuration
+     * @param accessLog       Access log instance (may be null)
+     * @param startTime       Request start time for duration calculation
+     * @param clientAddress   Client IP address for logging
      */
-    public HttpForwardHandler(ChannelHandlerContext clientCtx, HttpRequest originalRequest, Config config) {
+    public HttpForwardHandler(ChannelHandlerContext clientCtx, HttpRequest originalRequest,
+                               Config config, AccessLog accessLog, long startTime, String clientAddress) {
         this.clientCtx = clientCtx;
         this.originalRequest = originalRequest;
         this.config = config;
+        this.accessLog = accessLog;
+        this.startTime = startTime;
+        this.clientAddress = clientAddress;
     }
 
     /**
@@ -99,12 +110,28 @@ public class HttpForwardHandler extends SimpleChannelInboundHandler<FullHttpResp
                 response.content().retain());
         clientResponse.headers().set(response.headers());
 
+        // Log access
+        long duration = System.currentTimeMillis() - startTime;
+        int contentLength = response.content().readableBytes();
+        String contentType = response.headers().get(HttpHeaderNames.CONTENT_TYPE);
+        logAccess(response.status().code(), duration, contentLength, contentType);
+
         log.debug("Forwarding response {} to client", response.status());
 
         clientCtx.writeAndFlush(clientResponse).addListener(future -> {
             // Close upstream connection after response is sent
             ctx.close();
         });
+    }
+
+    /**
+     * Logs access to the access log.
+     */
+    private void logAccess(int statusCode, long duration, long bytesWritten, String contentType) {
+        if (accessLog != null) {
+            accessLog.logHttpForward(clientAddress, originalRequest.method().name(),
+                    originalRequest.uri(), statusCode, duration, bytesWritten, contentType);
+        }
     }
 
     @Override

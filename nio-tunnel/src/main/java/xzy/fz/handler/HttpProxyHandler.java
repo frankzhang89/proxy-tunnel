@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
 import xzy.fz.handler.upstream.HttpConnectHandler;
 import xzy.fz.handler.upstream.HttpForwardHandler;
+import xzy.fz.log.AccessLog;
 
 import java.nio.charset.StandardCharsets;
 
@@ -49,16 +50,19 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
 
     private final Config config;
     private final SslContext sslContext;
+    private final AccessLog accessLog;
 
     /**
      * Creates a new HTTP proxy handler.
      *
      * @param config     Proxy configuration
      * @param sslContext SSL context for upstream TLS connections (may be null if TLS disabled)
+     * @param accessLog  Access log for Squid-style logging (may be null if disabled)
      */
-    public HttpProxyHandler(Config config, SslContext sslContext) {
+    public HttpProxyHandler(Config config, SslContext sslContext, AccessLog accessLog) {
         this.config = config;
         this.sslContext = sslContext;
+        this.accessLog = accessLog;
     }
 
     /**
@@ -132,6 +136,10 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
         String targetHost = parts[0];
         int targetPort = parts.length > 1 ? Integer.parseInt(parts[1]) : 443;
 
+        // Capture start time for access log
+        long startTime = System.currentTimeMillis();
+        String clientAddress = extractClientAddress(ctx);
+
         log.info("CONNECT {} via upstream {}:{}", target, config.upstreamHost(), config.upstreamPort());
 
         // Create bootstrap for upstream connection
@@ -154,7 +162,8 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
                         // Aggregate full HTTP response for CONNECT result
                         p.addLast(new HttpObjectAggregator(65536));
                         // Handler for upstream CONNECT response
-                        p.addLast(new HttpConnectHandler(ctx, targetHost, targetPort, config));
+                        p.addLast(new HttpConnectHandler(ctx, targetHost, targetPort, config,
+                                accessLog, startTime, clientAddress));
                     }
                 });
 
@@ -176,6 +185,10 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
         log.info("{} {} via upstream {}:{}",
                 request.method(), request.uri(), config.upstreamHost(), config.upstreamPort());
 
+        // Capture start time for access log
+        long startTime = System.currentTimeMillis();
+        String clientAddress = extractClientAddress(ctx);
+
         // Create bootstrap for upstream connection
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
@@ -195,7 +208,8 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
                         // Aggregator for response handling
                         p.addLast(new HttpObjectAggregator(config.httpMaxInitialBytes()));
                         // Handler to forward request and relay response
-                        p.addLast(new HttpForwardHandler(ctx, request, config));
+                        p.addLast(new HttpForwardHandler(ctx, request, config,
+                                accessLog, startTime, clientAddress));
                     }
                 });
 
@@ -285,5 +299,23 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         log.debug("Exception in HTTP handler: {}", cause.getMessage());
         ctx.close();
+    }
+
+    /**
+     * Extracts the client IP address from the channel context.
+     *
+     * @param ctx Channel context
+     * @return Client IP address as string
+     */
+    private String extractClientAddress(ChannelHandlerContext ctx) {
+        try {
+            java.net.SocketAddress remoteAddress = ctx.channel().remoteAddress();
+            if (remoteAddress instanceof java.net.InetSocketAddress inetAddr) {
+                return inetAddr.getAddress().getHostAddress();
+            }
+            return remoteAddress != null ? remoteAddress.toString() : "-";
+        } catch (Exception e) {
+            return "-";
+        }
     }
 }

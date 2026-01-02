@@ -94,13 +94,19 @@ public final class ConfigLoader {
         String serverName = props.getProperty("server.name", "nio-tunnel");
         String logFile = props.getProperty("log.file");
 
+        // Access log settings (Squid-style)
+        boolean accessLogEnabled = Boolean.parseBoolean(props.getProperty("access.log.enabled", "true"));
+        String accessLogFile = props.getProperty("access.log.file");
+        boolean accessLogConsole = Boolean.parseBoolean(props.getProperty("access.log.console", "true"));
+
         return new Config(
                 listenHost, listenPort, socksPort,
                 requireClientAuth, expectedClientAuthHeader,
                 upstreamHost, upstreamPort, upstreamTls, upstreamAuthHeader,
                 connectTimeoutMillis, httpMaxInitialBytes,
                 pacEnabled, pacPath, pacHost, pacFile,
-                serverName, logFile
+                serverName, logFile,
+                accessLogFile, accessLogConsole, accessLogEnabled
         );
     }
 

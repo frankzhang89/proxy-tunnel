@@ -2,35 +2,33 @@ package xzy.fz.handler.upstream;
 
 import io.netty.channel.*;
 import io.netty.handler.codec.http.*;
-import io.netty.handler.codec.socksx.SocksPortUnificationServerHandler;
-import io.netty.handler.codec.socksx.v5.*;
+import io.netty.handler.codec.socksx.v4.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
 import xzy.fz.handler.RelayHandler;
-import xzy.fz.handler.Socks5Handler;
 import xzy.fz.log.AccessLog;
 
-import java.net.InetSocketAddress;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Handles upstream proxy response for SOCKS5 CONNECT requests.
+ * Handles upstream proxy response for SOCKS4 CONNECT requests.
  * <p>
- * This handler is used when a SOCKS5 client sends a CONNECT command.
+ * This handler is used when a SOCKS4 client sends a CONNECT command.
  * It sends an HTTP CONNECT to the upstream proxy and translates the
- * response back to SOCKS5 protocol.
+ * response back to SOCKS4 protocol.
  *
  * <h2>Flow:</h2>
  * <ol>
  *   <li>On channel activation, sends HTTP CONNECT to upstream</li>
  *   <li>Receives 200 response from upstream</li>
- *   <li>Sends SOCKS5 success response to client</li>
+ *   <li>Sends SOCKS4 success response to client</li>
  *   <li>Switches both channels to relay mode</li>
  * </ol>
  */
-public class Socks5ConnectHandler extends SimpleChannelInboundHandler<FullHttpResponse> {
-    private static final Logger log = LoggerFactory.getLogger(Socks5ConnectHandler.class);
+public class Socks4ConnectHandler extends SimpleChannelInboundHandler<FullHttpResponse> {
+    private static final Logger log = LoggerFactory.getLogger(Socks4ConnectHandler.class);
 
     private final ChannelHandlerContext clientCtx;
     private final String targetHost;
@@ -41,17 +39,17 @@ public class Socks5ConnectHandler extends SimpleChannelInboundHandler<FullHttpRe
     private final String clientAddress;
 
     /**
-     * Creates a new SOCKS5 upstream connect handler.
+     * Creates a new SOCKS4 upstream connect handler.
      *
      * @param clientCtx     Client channel context
-     * @param targetHost    Target host from SOCKS5 CONNECT command
-     * @param targetPort    Target port from SOCKS5 CONNECT command
+     * @param targetHost    Target host from SOCKS4 CONNECT command
+     * @param targetPort    Target port from SOCKS4 CONNECT command
      * @param config        Proxy configuration
      * @param accessLog     Access log for Squid-style logging
      * @param startTime     Request start time in milliseconds
      * @param clientAddress Client address string for logging
      */
-    public Socks5ConnectHandler(ChannelHandlerContext clientCtx, String targetHost,
+    public Socks4ConnectHandler(ChannelHandlerContext clientCtx, String targetHost,
                                 int targetPort, Config config, AccessLog accessLog,
                                 long startTime, String clientAddress) {
         this.clientCtx = clientCtx;
@@ -82,7 +80,7 @@ public class Socks5ConnectHandler extends SimpleChannelInboundHandler<FullHttpRe
                     config.expectedUpstreamAuthHeader());
         }
 
-        log.debug("SOCKS5: Sending HTTP CONNECT to upstream for {}:{}", targetHost, targetPort);
+        log.debug("SOCKS4: Sending HTTP CONNECT to upstream for {}:{}", targetHost, targetPort);
         ctx.writeAndFlush(connectRequest);
     }
 
@@ -92,28 +90,21 @@ public class Socks5ConnectHandler extends SimpleChannelInboundHandler<FullHttpRe
     @Override
     protected void channelRead0(ChannelHandlerContext upstreamCtx, FullHttpResponse response) {
         if (response.status().code() == 200) {
-            log.debug("SOCKS5 upstream CONNECT successful for {}:{}", targetHost, targetPort);
+            log.debug("SOCKS4 upstream CONNECT successful for {}:{}", targetHost, targetPort);
 
-            // Send SOCKS5 success response to client
-            // Use local address as the bound address (required by SOCKS5 protocol)
-            InetSocketAddress upstreamAddr = (InetSocketAddress) upstreamCtx.channel().localAddress();
-            clientCtx.writeAndFlush(new DefaultSocks5CommandResponse(
-                    Socks5CommandStatus.SUCCESS,
-                    Socks5AddressType.IPv4,
-                    upstreamAddr.getAddress().getHostAddress(),
-                    upstreamAddr.getPort()));
+            // Send SOCKS4 success response to client
+            clientCtx.writeAndFlush(new DefaultSocks4CommandResponse(Socks4CommandStatus.SUCCESS));
 
             // Switch both channels to relay mode
             switchToRelayMode(upstreamCtx);
         } else {
-            log.error("SOCKS5 upstream CONNECT failed: {}", response.status());
-            
+            log.error("SOCKS4 upstream CONNECT failed: {}", response.status());
+
             // Log failed access
             logAccess(response.status().code(), 0);
 
-            // Send SOCKS5 failure response to client
-            clientCtx.writeAndFlush(new DefaultSocks5CommandResponse(
-                            Socks5CommandStatus.FAILURE, Socks5AddressType.IPv4))
+            // Send SOCKS4 failure response to client
+            clientCtx.writeAndFlush(new DefaultSocks4CommandResponse(Socks4CommandStatus.REJECTED_OR_FAILED))
                     .addListener(ChannelFutureListener.CLOSE);
             upstreamCtx.close();
         }
@@ -126,9 +117,11 @@ public class Socks5ConnectHandler extends SimpleChannelInboundHandler<FullHttpRe
         Channel clientChannel = clientCtx.channel();
         Channel upstreamChannel = upstreamCtx.channel();
 
-        // Remove SOCKS5 codecs from client pipeline
-        removeSocks5Handlers(clientChannel.pipeline());
-        removeHandlerSafely(clientChannel.pipeline(), Socks5Handler.class);
+        // Remove SOCKS4 decoder from client pipeline
+        removeHandlerSafely(clientChannel.pipeline(), Socks4ServerDecoder.class);
+        removeHandlerSafely(clientChannel.pipeline(), Socks4ServerEncoder.class);
+        removeHandlerByName(clientChannel.pipeline(), "socks-unification");
+        removeHandlerByName(clientChannel.pipeline(), "socks5-handler");
 
         // Remove HTTP codecs from upstream pipeline
         removeHandlerSafely(upstreamChannel.pipeline(), HttpClientCodec.class);
@@ -137,27 +130,33 @@ public class Socks5ConnectHandler extends SimpleChannelInboundHandler<FullHttpRe
 
         // Shared bytes counter for access logging
         AtomicLong totalBytes = new AtomicLong(0);
-        
-        // Callback to log access when connection closes
-        Runnable logCallback = () -> logAccess(200, totalBytes.get());
+        AtomicBoolean logged = new AtomicBoolean(false);
 
-        // Add relay handlers for bidirectional byte forwarding with bytes tracking
+        // Callback to log access when connection closes
+        Runnable logCallback = () -> {
+            if (logged.compareAndSet(false, true)) {
+                logAccess(200, totalBytes.get());
+            }
+        };
+
+        // Create relay handlers
         RelayHandler clientRelay = new RelayHandler(upstreamChannel, null);
         RelayHandler upstreamRelay = new RelayHandler(clientChannel, null);
-        
+
+        // Add relay handlers for bidirectional byte forwarding
         clientChannel.pipeline().addLast("relay", clientRelay);
         upstreamChannel.pipeline().addLast("relay", upstreamRelay);
-        
-        // Log access when connection closes
+
+        // Log access when either channel closes
         clientChannel.closeFuture().addListener(f -> {
             totalBytes.addAndGet(clientRelay.getBytesTransferred());
             totalBytes.addAndGet(upstreamRelay.getBytesTransferred());
             logCallback.run();
         });
 
-        log.debug("SOCKS5: Switched to relay mode for {}:{}", targetHost, targetPort);
+        log.debug("SOCKS4: Switched to relay mode for {}:{}", targetHost, targetPort);
     }
-    
+
     /**
      * Logs access in Squid-style format.
      */
@@ -166,22 +165,12 @@ public class Socks5ConnectHandler extends SimpleChannelInboundHandler<FullHttpRe
             long duration = System.currentTimeMillis() - startTime;
             String url = targetHost + ":" + targetPort;
             boolean success = statusCode == 200;
-            accessLog.logSocks5Connect(clientAddress, url, success, duration, bytes);
+            accessLog.logSocks4Connect(clientAddress, url, success, duration, bytes);
         }
     }
 
     /**
-     * Removes all SOCKS5 related handlers from pipeline.
-     */
-    private void removeSocks5Handlers(ChannelPipeline pipeline) {
-        removeHandlerSafely(pipeline, SocksPortUnificationServerHandler.class);
-        removeHandlerSafely(pipeline, Socks5CommandRequestDecoder.class);
-        removeHandlerSafely(pipeline, Socks5PasswordAuthRequestDecoder.class);
-        removeHandlerSafely(pipeline, Socks5InitialRequestDecoder.class);
-    }
-
-    /**
-     * Safely removes a handler from the pipeline.
+     * Safely removes a handler from the pipeline by type.
      */
     private void removeHandlerSafely(ChannelPipeline pipeline, Class<? extends ChannelHandler> handlerType) {
         try {
@@ -191,14 +180,24 @@ public class Socks5ConnectHandler extends SimpleChannelInboundHandler<FullHttpRe
         }
     }
 
+    /**
+     * Safely removes a handler from the pipeline by name.
+     */
+    private void removeHandlerByName(ChannelPipeline pipeline, String name) {
+        try {
+            pipeline.remove(name);
+        } catch (Exception ignored) {
+            // Handler may not exist in pipeline
+        }
+    }
+
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        log.error("SOCKS5 upstream error: {}", cause.getMessage());
+        log.error("SOCKS4 upstream error: {}", cause.getMessage());
 
-        // Send SOCKS5 failure to client
+        // Send SOCKS4 failure to client
         if (clientCtx.channel().isActive()) {
-            clientCtx.writeAndFlush(new DefaultSocks5CommandResponse(
-                            Socks5CommandStatus.FAILURE, Socks5AddressType.IPv4))
+            clientCtx.writeAndFlush(new DefaultSocks4CommandResponse(Socks4CommandStatus.REJECTED_OR_FAILED))
                     .addListener(ChannelFutureListener.CLOSE);
         }
         ctx.close();

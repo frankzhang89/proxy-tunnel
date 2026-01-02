@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
 import xzy.fz.handler.RelayHandler;
+import xzy.fz.log.AccessLog;
 
 import java.nio.charset.StandardCharsets;
 
@@ -34,21 +35,31 @@ public class HttpConnectHandler extends SimpleChannelInboundHandler<FullHttpResp
     private final String targetHost;
     private final int targetPort;
     private final Config config;
+    private final AccessLog accessLog;
+    private final long startTime;
+    private final String clientAddress;
 
     /**
      * Creates a new HTTP CONNECT handler.
      *
-     * @param clientCtx  Client channel context (for sending responses)
-     * @param targetHost Target host from CONNECT request
-     * @param targetPort Target port from CONNECT request
-     * @param config     Proxy configuration
+     * @param clientCtx     Client channel context (for sending responses)
+     * @param targetHost    Target host from CONNECT request
+     * @param targetPort    Target port from CONNECT request
+     * @param config        Proxy configuration
+     * @param accessLog     Access log instance (may be null)
+     * @param startTime     Request start time for duration calculation
+     * @param clientAddress Client IP address for logging
      */
     public HttpConnectHandler(ChannelHandlerContext clientCtx, String targetHost,
-                              int targetPort, Config config) {
+                              int targetPort, Config config, AccessLog accessLog,
+                              long startTime, String clientAddress) {
         this.clientCtx = clientCtx;
         this.targetHost = targetHost;
         this.targetPort = targetPort;
         this.config = config;
+        this.accessLog = accessLog;
+        this.startTime = startTime;
+        this.clientAddress = clientAddress;
     }
 
     /**
@@ -90,10 +101,13 @@ public class HttpConnectHandler extends SimpleChannelInboundHandler<FullHttpResp
                     .set("Proxy-Connection", "keep-alive");
             clientCtx.writeAndFlush(clientResponse);
 
-            // Switch both channels to raw byte relay mode
+            // Switch both channels to raw byte relay mode with access logging
             switchToRelayMode(upstreamCtx);
         } else {
             log.error("Upstream CONNECT failed with status: {}", response.status());
+
+            // Log failed CONNECT
+            logAccess(response.status().code(), 0);
 
             // Forward upstream error to client
             FullHttpResponse errorResponse = new DefaultFullHttpResponse(
@@ -122,11 +136,44 @@ public class HttpConnectHandler extends SimpleChannelInboundHandler<FullHttpResp
         removeHandlerSafely(upstreamChannel.pipeline(), HttpObjectAggregator.class);
         upstreamChannel.pipeline().remove(this);
 
+        // Track total bytes for access logging
+        java.util.concurrent.atomic.AtomicLong totalBytes = new java.util.concurrent.atomic.AtomicLong(0);
+        java.util.concurrent.atomic.AtomicBoolean logged = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        // Create completion callback that logs once when connection closes
+        Runnable logCallback = () -> {
+            if (logged.compareAndSet(false, true)) {
+                logAccess(200, totalBytes.get());
+            }
+        };
+
+        // Create relay handlers with bytes tracking
+        RelayHandler clientRelay = new RelayHandler(upstreamChannel, null);
+        RelayHandler upstreamRelay = new RelayHandler(clientChannel, null);
+
         // Add relay handlers for bidirectional byte forwarding
-        clientChannel.pipeline().addLast("relay", new RelayHandler(upstreamChannel));
-        upstreamChannel.pipeline().addLast("relay", new RelayHandler(clientChannel));
+        clientChannel.pipeline().addLast("relay", clientRelay);
+        upstreamChannel.pipeline().addLast("relay", upstreamRelay);
+        
+        // Log access when either channel closes
+        clientChannel.closeFuture().addListener(f -> {
+            totalBytes.addAndGet(clientRelay.getBytesTransferred());
+            totalBytes.addAndGet(upstreamRelay.getBytesTransferred());
+            logCallback.run();
+        });
 
         log.debug("Switched to relay mode for {}:{}", targetHost, targetPort);
+    }
+
+    /**
+     * Logs access to the access log.
+     */
+    private void logAccess(int statusCode, long bytesWritten) {
+        if (accessLog != null) {
+            long duration = System.currentTimeMillis() - startTime;
+            accessLog.logConnect(clientAddress, targetHost + ":" + targetPort,
+                    statusCode, duration, bytesWritten);
+        }
     }
 
     /**

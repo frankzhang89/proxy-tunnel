@@ -14,10 +14,13 @@ import io.netty.util.ReferenceCountUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
+import xzy.fz.handler.upstream.DirectHttpForwardHandler;
+import xzy.fz.handler.upstream.DirectTunnelHandler;
 import xzy.fz.handler.upstream.HttpConnectHandler;
 import xzy.fz.handler.upstream.HttpForwardHandler;
 import xzy.fz.log.AccessLog;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -121,13 +124,8 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
     /**
      * Handles HTTP CONNECT requests for HTTPS tunneling.
      * <p>
-     * Flow:
-     * <ol>
-     *   <li>Parse target host:port from request URI</li>
-     *   <li>Connect to upstream HTTPS proxy</li>
-     *   <li>Send CONNECT request to upstream</li>
-     *   <li>On success, respond 200 to client and start raw byte relay</li>
-     * </ol>
+     * If the target host matches a no-proxy pattern, connects directly to the target.
+     * Otherwise connects via the upstream HTTPS proxy.
      */
     private void handleConnect(ChannelHandlerContext ctx, HttpRequest request) {
         // Parse target from CONNECT request (e.g., "example.com:443")
@@ -140,8 +138,67 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
         long startTime = System.currentTimeMillis();
         String clientAddress = extractClientAddress(ctx);
 
-        log.info("CONNECT {} via upstream {}:{}", target, config.upstreamHost(), config.upstreamPort());
+        if (config.noProxyMatcher().matches(targetHost)) {
+            log.info("CONNECT {} DIRECT (no-proxy)", target);
+            handleConnectDirect(ctx, targetHost, targetPort, startTime, clientAddress);
+        } else {
+            log.info("CONNECT {} via upstream {}:{}", target, config.upstreamHost(), config.upstreamPort());
+            handleConnectViaUpstream(ctx, targetHost, targetPort, startTime, clientAddress);
+        }
+    }
 
+    /**
+     * Connects directly to the target for a CONNECT request (bypassing upstream proxy).
+     */
+    private void handleConnectDirect(ChannelHandlerContext ctx, String targetHost, int targetPort,
+                                      long startTime, String clientAddress) {
+        Bootstrap bootstrap = new Bootstrap();
+        bootstrap.group(ctx.channel().eventLoop())
+                .channel(NioSocketChannel.class)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, config.connectTimeoutMillis())
+                .option(ChannelOption.TCP_NODELAY, true)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ch.pipeline().addLast(new DirectTunnelHandler(
+                                ctx,
+                                () -> {
+                                    // Send 200 Connection Established to client
+                                    FullHttpResponse response = new DefaultFullHttpResponse(
+                                            HttpVersion.HTTP_1_1,
+                                            new HttpResponseStatus(200, "Connection Established"));
+                                    response.headers()
+                                            .set(HttpHeaderNames.CONNECTION, HttpHeaderValues.KEEP_ALIVE)
+                                            .set("Proxy-Connection", "keep-alive");
+                                    ctx.writeAndFlush(response);
+                                },
+                                () -> sendError(ctx, HttpResponseStatus.BAD_GATEWAY,
+                                        "Failed to connect directly to " + targetHost),
+                                pipeline -> {
+                                    removeHandlerSafely(pipeline, HttpRequestDecoder.class);
+                                    removeHandlerSafely(pipeline, HttpResponseEncoder.class);
+                                    removeHandlerSafely(pipeline, "http-proxy-handler");
+                                },
+                                accessLog, startTime, clientAddress, targetHost, targetPort
+                        ));
+                    }
+                });
+
+        bootstrap.connect(targetHost, targetPort).addListener((ChannelFutureListener) future -> {
+            if (!future.isSuccess()) {
+                log.error("Direct CONNECT to {} failed: {}", targetHost + ":" + targetPort,
+                        future.cause().getMessage());
+                sendError(ctx, HttpResponseStatus.BAD_GATEWAY,
+                        "Failed to connect directly to " + targetHost);
+            }
+        });
+    }
+
+    /**
+     * Connects to the target via the upstream HTTPS proxy for a CONNECT request.
+     */
+    private void handleConnectViaUpstream(ChannelHandlerContext ctx, String targetHost, int targetPort,
+                                           long startTime, String clientAddress) {
         // Create bootstrap for upstream connection
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())  // Use same event loop as client
@@ -179,16 +236,81 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
 
     /**
      * Handles regular HTTP requests (GET, POST, etc.).
-     * Forwards the request to upstream proxy and relays the response back.
+     * If the target host matches a no-proxy pattern, connects directly to the server.
+     * Otherwise forwards via the upstream proxy.
      */
     private void handleHttpForward(ChannelHandlerContext ctx, HttpRequest request) {
-        log.info("{} {} via upstream {}:{}",
-                request.method(), request.uri(), config.upstreamHost(), config.upstreamPort());
-
         // Capture start time for access log
         long startTime = System.currentTimeMillis();
         String clientAddress = extractClientAddress(ctx);
 
+        // Try to extract the target host from the request URI for no-proxy check
+        String targetHost = extractHostFromAbsoluteUri(request.uri());
+        if (targetHost != null && config.noProxyMatcher().matches(targetHost)) {
+            log.info("{} {} DIRECT (no-proxy)", request.method(), request.uri());
+            handleHttpForwardDirect(ctx, request, startTime, clientAddress);
+        } else {
+            log.info("{} {} via upstream {}:{}",
+                    request.method(), request.uri(), config.upstreamHost(), config.upstreamPort());
+            handleHttpForwardViaUpstream(ctx, request, startTime, clientAddress);
+        }
+    }
+
+    /**
+     * Forwards a plain HTTP request directly to the target server (no upstream proxy).
+     */
+    private void handleHttpForwardDirect(ChannelHandlerContext ctx, HttpRequest request,
+                                          long startTime, String clientAddress) {
+        String host;
+        int port;
+        String relativeUri;
+        try {
+            URI uri = new URI(request.uri());
+            host = uri.getHost();
+            port = uri.getPort() == -1 ? 80 : uri.getPort();
+            String path = uri.getRawPath();
+            String query = uri.getRawQuery();
+            relativeUri = (path == null || path.isEmpty()) ? "/" :
+                    (query != null ? path + "?" + query : path);
+        } catch (Exception e) {
+            log.error("Failed to parse URI for direct forward: {}", request.uri());
+            sendError(ctx, HttpResponseStatus.BAD_REQUEST, "Invalid request URI");
+            return;
+        }
+
+        Bootstrap bootstrap = new Bootstrap();
+        bootstrap.group(ctx.channel().eventLoop())
+                .channel(NioSocketChannel.class)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, config.connectTimeoutMillis())
+                .option(ChannelOption.TCP_NODELAY, true)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ChannelPipeline p = ch.pipeline();
+                        p.addLast(new HttpClientCodec());
+                        p.addLast(new HttpObjectAggregator(config.httpMaxInitialBytes()));
+                        p.addLast(new DirectHttpForwardHandler(ctx, request, relativeUri,
+                                accessLog, startTime, clientAddress));
+                    }
+                });
+
+        final String finalHost = host;
+        final int finalPort = port;
+        bootstrap.connect(host, port).addListener((ChannelFutureListener) future -> {
+            if (!future.isSuccess()) {
+                log.error("Direct HTTP forward to {}:{} failed: {}", finalHost, finalPort,
+                        future.cause().getMessage());
+                sendError(ctx, HttpResponseStatus.BAD_GATEWAY,
+                        "Failed to connect directly to " + finalHost);
+            }
+        });
+    }
+
+    /**
+     * Forwards a plain HTTP request to the upstream proxy.
+     */
+    private void handleHttpForwardViaUpstream(ChannelHandlerContext ctx, HttpRequest request,
+                                               long startTime, String clientAddress) {
         // Create bootstrap for upstream connection
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
@@ -299,6 +421,42 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         log.debug("Exception in HTTP handler: {}", cause.getMessage());
         ctx.close();
+    }
+
+    /**
+     * Extracts the hostname from an absolute HTTP URI (e.g., {@code http://example.com:8080/path}).
+     * Returns null if parsing fails or the URI is not absolute.
+     */
+    private static String extractHostFromAbsoluteUri(String uri) {
+        try {
+            URI parsed = new URI(uri);
+            return parsed.getHost();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Safely removes a handler from the pipeline by type.
+     */
+    private static void removeHandlerSafely(ChannelPipeline pipeline,
+                                             Class<? extends ChannelHandler> handlerType) {
+        try {
+            pipeline.remove(handlerType);
+        } catch (Exception ignored) {
+            // Handler may not exist in pipeline
+        }
+    }
+
+    /**
+     * Safely removes a handler from the pipeline by name.
+     */
+    private static void removeHandlerSafely(ChannelPipeline pipeline, String handlerName) {
+        try {
+            pipeline.remove(handlerName);
+        } catch (Exception ignored) {
+            // Handler may not exist in pipeline
+        }
     }
 
     /**

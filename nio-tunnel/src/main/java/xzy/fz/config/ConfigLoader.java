@@ -1,5 +1,7 @@
 package xzy.fz.config;
 
+import xzy.fz.util.NoProxyMatcher;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -99,6 +101,9 @@ public final class ConfigLoader {
         String accessLogFile = props.getProperty("access.log.file");
         boolean accessLogConsole = Boolean.parseBoolean(props.getProperty("access.log.console", "true"));
 
+        // No-proxy settings
+        NoProxyMatcher noProxyMatcher = new NoProxyMatcher(props.getProperty("no.proxy.hosts"));
+
         return new Config(
                 listenHost, listenPort, socksPort,
                 requireClientAuth, expectedClientAuthHeader,
@@ -106,7 +111,8 @@ public final class ConfigLoader {
                 connectTimeoutMillis, httpMaxInitialBytes,
                 pacEnabled, pacPath, pacHost, pacFile,
                 serverName, logFile,
-                accessLogFile, accessLogConsole, accessLogEnabled
+                accessLogFile, accessLogConsole, accessLogEnabled,
+                noProxyMatcher
         );
     }
 

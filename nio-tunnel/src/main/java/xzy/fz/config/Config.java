@@ -2,6 +2,7 @@ package xzy.fz.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import xzy.fz.util.NoProxyMatcher;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -39,6 +40,7 @@ import java.nio.file.Path;
  * @param accessLogFile            Access log file path (Squid-style format)
  * @param accessLogConsole         Whether to output access log to console
  * @param accessLogEnabled         Whether access logging is enabled
+ * @param noProxyMatcher           Matcher for hosts/IPs that bypass the upstream proxy (direct connection)
  */
 public record Config(
         String listenHost,
@@ -60,7 +62,8 @@ public record Config(
         String logFile,
         String accessLogFile,
         boolean accessLogConsole,
-        boolean accessLogEnabled
+        boolean accessLogEnabled,
+        NoProxyMatcher noProxyMatcher
 ) {
     private static final Logger log = LoggerFactory.getLogger(Config.class);
 

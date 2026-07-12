@@ -14,6 +14,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
 import xzy.fz.config.ConfigLoader;
+import xzy.fz.handler.upstream.DirectTunnelHandler;
 import xzy.fz.handler.upstream.Socks4ConnectHandler;
 import xzy.fz.handler.upstream.Socks5ConnectHandler;
 import xzy.fz.log.AccessLog;
@@ -108,9 +109,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
 
     /**
      * Handles SOCKS4/SOCKS4a CONNECT command.
-     * <p>
-     * SOCKS4 does not have a separate handshake phase - the command
-     * is sent directly. Authentication is userid-based only.
+     * If the target matches a no-proxy pattern, connects directly; otherwise via upstream.
      */
     private void handleSocks4Command(ChannelHandlerContext ctx, Socks4CommandRequest request) {
         // Only CONNECT command is supported
@@ -128,10 +127,63 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
         long startTime = System.currentTimeMillis();
         String clientAddress = extractClientAddress(ctx);
 
-        log.info("SOCKS4 CONNECT {}:{} via upstream {}:{} (userid: {})",
-                targetHost, targetPort, config.upstreamHost(), config.upstreamPort(), request.userId());
+        if (config.noProxyMatcher().matches(targetHost)) {
+            log.info("SOCKS4 CONNECT {}:{} DIRECT (no-proxy, userid: {})",
+                    targetHost, targetPort, request.userId());
+            connectSocks4Direct(ctx, targetHost, targetPort, startTime, clientAddress);
+        } else {
+            log.info("SOCKS4 CONNECT {}:{} via upstream {}:{} (userid: {})",
+                    targetHost, targetPort, config.upstreamHost(), config.upstreamPort(), request.userId());
+            connectSocks4ViaUpstream(ctx, targetHost, targetPort, startTime, clientAddress);
+        }
+    }
 
-        // Connect to upstream proxy via HTTP CONNECT
+    /**
+     * Connects directly to the target for SOCKS4 CONNECT (bypasses upstream proxy).
+     */
+    private void connectSocks4Direct(ChannelHandlerContext ctx, String targetHost, int targetPort,
+                                      long startTime, String clientAddress) {
+        Bootstrap bootstrap = new Bootstrap();
+        bootstrap.group(ctx.channel().eventLoop())
+                .channel(NioSocketChannel.class)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, config.connectTimeoutMillis())
+                .option(ChannelOption.TCP_NODELAY, true)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ch.pipeline().addLast(new DirectTunnelHandler(
+                                ctx,
+                                () -> ctx.writeAndFlush(
+                                        new DefaultSocks4CommandResponse(Socks4CommandStatus.SUCCESS)),
+                                () -> ctx.writeAndFlush(new DefaultSocks4CommandResponse(
+                                        Socks4CommandStatus.REJECTED_OR_FAILED))
+                                        .addListener(ChannelFutureListener.CLOSE),
+                                pipeline -> {
+                                    removeHandlerSafely(pipeline, Socks4ServerDecoder.class);
+                                    removeHandlerSafely(pipeline, Socks4ServerEncoder.class);
+                                    removeHandlerByName(pipeline, "socks-unification");
+                                    removeHandlerByName(pipeline, "socks5-handler");
+                                },
+                                accessLog, startTime, clientAddress, targetHost, targetPort
+                        ));
+                    }
+                });
+
+        bootstrap.connect(targetHost, targetPort).addListener((ChannelFutureListener) future -> {
+            if (!future.isSuccess()) {
+                log.error("SOCKS4 direct connect to {}:{} failed: {}", targetHost, targetPort,
+                        future.cause().getMessage());
+                ctx.writeAndFlush(new DefaultSocks4CommandResponse(Socks4CommandStatus.REJECTED_OR_FAILED))
+                        .addListener(ChannelFutureListener.CLOSE);
+            }
+        });
+    }
+
+    /**
+     * Connects to the target via the upstream proxy for SOCKS4 CONNECT.
+     */
+    private void connectSocks4ViaUpstream(ChannelHandlerContext ctx, String targetHost, int targetPort,
+                                           long startTime, String clientAddress) {
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
                 .channel(NioSocketChannel.class)
@@ -224,9 +276,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
 
     /**
      * Handles SOCKS5 command requests.
-     * <p>
-     * Only CONNECT command is supported. BIND and UDP ASSOCIATE are rejected.
-     * For CONNECT, establishes connection to upstream proxy via HTTP CONNECT.
+     * Only CONNECT command is supported. Checks no-proxy list before routing.
      */
     private void handleCommandRequest(ChannelHandlerContext ctx, Socks5CommandRequest request) {
         // Only CONNECT command is supported
@@ -245,9 +295,72 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
         long startTime = System.currentTimeMillis();
         String clientAddress = extractClientAddress(ctx);
 
-        log.info("SOCKS5 CONNECT {}:{} via upstream {}:{}",
-                targetHost, targetPort, config.upstreamHost(), config.upstreamPort());
+        if (config.noProxyMatcher().matches(targetHost)) {
+            log.info("SOCKS5 CONNECT {}:{} DIRECT (no-proxy)", targetHost, targetPort);
+            connectSocks5Direct(ctx, request, targetHost, targetPort, startTime, clientAddress);
+        } else {
+            log.info("SOCKS5 CONNECT {}:{} via upstream {}:{}",
+                    targetHost, targetPort, config.upstreamHost(), config.upstreamPort());
+            connectSocks5ViaUpstream(ctx, targetHost, targetPort, startTime, clientAddress);
+        }
+    }
 
+    /**
+     * Connects directly to the target for SOCKS5 CONNECT (bypasses upstream proxy).
+     */
+    private void connectSocks5Direct(ChannelHandlerContext ctx, Socks5CommandRequest request,
+                                      String targetHost, int targetPort,
+                                      long startTime, String clientAddress) {
+        Bootstrap bootstrap = new Bootstrap();
+        bootstrap.group(ctx.channel().eventLoop())
+                .channel(NioSocketChannel.class)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, config.connectTimeoutMillis())
+                .option(ChannelOption.TCP_NODELAY, true)
+                .handler(new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel ch) {
+                        ch.pipeline().addLast(new DirectTunnelHandler(
+                                ctx,
+                                () -> {
+                                    // Send SOCKS5 success using the local address as bound address
+                                    java.net.InetSocketAddress localAddr =
+                                            (java.net.InetSocketAddress) ch.localAddress();
+                                    String boundAddr = localAddr != null
+                                            ? localAddr.getAddress().getHostAddress() : "0.0.0.0";
+                                    int boundPort = localAddr != null ? localAddr.getPort() : 0;
+                                    ctx.writeAndFlush(new DefaultSocks5CommandResponse(
+                                            Socks5CommandStatus.SUCCESS,
+                                            Socks5AddressType.IPv4,
+                                            boundAddr, boundPort));
+                                },
+                                () -> ctx.writeAndFlush(new DefaultSocks5CommandResponse(
+                                        Socks5CommandStatus.FAILURE, Socks5AddressType.IPv4))
+                                        .addListener(ChannelFutureListener.CLOSE),
+                                pipeline -> {
+                                    removeSocks5Handlers(pipeline);
+                                    removeHandlerSafely(pipeline, Socks5Handler.class);
+                                },
+                                accessLog, startTime, clientAddress, targetHost, targetPort
+                        ));
+                    }
+                });
+
+        bootstrap.connect(targetHost, targetPort).addListener((ChannelFutureListener) future -> {
+            if (!future.isSuccess()) {
+                log.error("SOCKS5 direct connect to {}:{} failed: {}", targetHost, targetPort,
+                        future.cause().getMessage());
+                ctx.writeAndFlush(new DefaultSocks5CommandResponse(
+                        Socks5CommandStatus.FAILURE, Socks5AddressType.IPv4))
+                        .addListener(ChannelFutureListener.CLOSE);
+            }
+        });
+    }
+
+    /**
+     * Connects to the target via the upstream proxy for SOCKS5 CONNECT.
+     */
+    private void connectSocks5ViaUpstream(ChannelHandlerContext ctx, String targetHost, int targetPort,
+                                           long startTime, String clientAddress) {
         // Connect to upstream proxy via HTTP CONNECT
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
@@ -282,6 +395,31 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
                                 .addListener(ChannelFutureListener.CLOSE);
                     }
                 });
+    }
+
+    /**
+     * Removes all SOCKS5 related handlers from pipeline.
+     */
+    private void removeSocks5Handlers(ChannelPipeline pipeline) {
+        removeHandlerSafely(pipeline, io.netty.handler.codec.socksx.SocksPortUnificationServerHandler.class);
+        removeHandlerSafely(pipeline, Socks5CommandRequestDecoder.class);
+        removeHandlerSafely(pipeline, Socks5PasswordAuthRequestDecoder.class);
+        removeHandlerSafely(pipeline, Socks5InitialRequestDecoder.class);
+    }
+
+    private void removeHandlerSafely(ChannelPipeline pipeline,
+                                      Class<? extends io.netty.channel.ChannelHandler> handlerType) {
+        try {
+            pipeline.remove(handlerType);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void removeHandlerByName(ChannelPipeline pipeline, String name) {
+        try {
+            pipeline.remove(name);
+        } catch (Exception ignored) {
+        }
     }
 
     /**

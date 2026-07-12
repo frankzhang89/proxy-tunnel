@@ -8,6 +8,7 @@ A high-performance NIO-based HTTP and SOCKS5 proxy using Netty that forwards tra
 - **SOCKS5 Proxy** - Full SOCKS5 protocol support with optional authentication
 - **PAC File** - Auto-generates or serves custom Proxy Auto-Config files
 - **TLS** - Secure communication with upstream HTTPS proxy
+- **No Proxy** - Bypass the upstream proxy and connect directly to specified hosts
 - Configuration via `config.properties` with CLI overrides (e.g. `--listen.port=9999`)
 - Optional Basic authentication on both inbound listener and upstream proxy
 - Runnable fat JAR created with Maven Shade
@@ -41,6 +42,7 @@ A high-performance NIO-based HTTP and SOCKS5 proxy using Netty that forwards tra
 | `pac.host` | Host in generated PAC file | `127.0.0.1` |
 | `pac.file` | Path to custom PAC file | empty (auto-generate) |
 | `server.name` | Name shown in responses | `nio-tunnel` |
+| `no.proxy.hosts` | Comma-separated hosts/IPs that should bypass the upstream proxy and connect directly | empty |
 
 CLI flags mirror property names using `--key=value`. `--config=path` loads an extra properties file after the defaults.
 

@@ -35,8 +35,24 @@ A lightweight HTTP listener that forwards traffic to an HTTPS proxy, enabling Je
 | `header.maxBytes` | Max request/response header bytes | `32768` |
 | `log.level` | `ERROR`/`WARN`/`INFO`/`DEBUG` | `INFO` |
 | `server.name` | Name shown in responses | `simple-tunnel` |
+| `no.proxy.hosts` | Comma-separated hosts/IPs that bypass upstream proxy and connect directly | empty |
 
 CLI flags mirror property names using `--key=value`. `--config=path` loads an extra properties file after the defaults.
+
+### No-proxy direct connections
+Set `no.proxy.hosts` to skip the upstream proxy for specific targets and connect directly.
+
+Supported patterns:
+- Exact host/IP: `maven.aliyun.com`, `10.240.22.152`
+- Wildcard domain: `*.tencent.com` (matches both `tencent.com` and subdomains)
+- IP prefix wildcard: `192.168.*`
+
+Example:
+```properties
+no.proxy.hosts=192.168.*,*.tencent.com,10.240.22.152,maven.aliyun.com
+```
+
+This applies to both HTTP CONNECT and regular HTTP forwarding requests.
 
 ## JetBrains Setup
 1. Start simple-tunnel.
@@ -45,7 +61,7 @@ CLI flags mirror property names using `--key=value`. `--config=path` loads an ex
 4. If you set `listen.username`/`listen.password`, enter them under Proxy authentication.
 
 ## Notes
-- The proxy currently forwards standard HTTP requests via tunnel; CONNECT requests can be added similarly.
+- The proxy supports both regular HTTP forwarding and HTTP CONNECT tunneling.
+- Targets matched by `no.proxy.hosts` are connected directly; other traffic goes through the upstream proxy.
 - The JVM trust store controls HTTPS verification. Customize via standard `javax.net.ssl.trustStore` flags if needed.
 - For troubleshooting, run with `--log.level=DEBUG` and watch stdout.
-

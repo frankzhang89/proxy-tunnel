@@ -7,6 +7,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -210,7 +211,16 @@ public  class SimpleProxyTunnel {
                     }
                 }
 
-                log.info("%s %s via %s", request.method(), request.target(), clientId);
+                DirectRoute directRoute = resolveDirectRoute(request);
+                if (directRoute != null) {
+                    log.info("%s %s direct to %s:%d via %s",
+                            request.method(), request.target(), directRoute.host(), directRoute.port(), clientId);
+                    handleDirectRoute(clientIn, clientOut, request, directRoute);
+                    return;
+                }
+
+                log.info("%s %s via upstream %s:%d from %s",
+                        request.method(), request.target(), config.upstreamHost(), config.upstreamPort(), clientId);
 
                 // Step 3: Connect to upstream proxy and forward the request
                 try (Socket upstream = openUpstreamSocket()) {
@@ -233,6 +243,28 @@ public  class SimpleProxyTunnel {
             }
         }
 
+        private void handleDirectRoute(BufferedInputStream clientIn,
+                                       BufferedOutputStream clientOut,
+                                       HttpRequestHead request,
+                                       DirectRoute route) throws IOException {
+            try (Socket target = openDirectSocket(route.host(), route.port())) {
+                target.setSoTimeout(config.readTimeoutMillis());
+                BufferedInputStream targetIn = new BufferedInputStream(target.getInputStream());
+                BufferedOutputStream targetOut = new BufferedOutputStream(target.getOutputStream());
+
+                if (route.connectTunnel()) {
+                    sendConnectEstablished(clientOut, config.serverName());
+                } else {
+                    List<Header> forwardedHeaders = filterDirectHeaders(request.headers());
+                    byte[] targetHead = HttpRequestHead.toWire(route.rewrittenStartLine(), forwardedHeaders);
+                    targetOut.write(targetHead);
+                    targetOut.flush();
+                }
+
+                bridge(clientIn, clientOut, targetIn, targetOut);
+            }
+        }
+
         /**
          * Opens a socket connection to the upstream proxy.
          * 
@@ -246,6 +278,12 @@ public  class SimpleProxyTunnel {
             // Connect with timeout to avoid hanging on unreachable hosts
             upstream.connect(new InetSocketAddress(config.upstreamHost(), config.upstreamPort()), config.connectTimeoutMillis());
             return upstream;
+        }
+
+        private Socket openDirectSocket(String host, int port) throws IOException {
+            Socket target = SocketFactory.getDefault().createSocket();
+            target.connect(new InetSocketAddress(host, port), config.connectTimeoutMillis());
+            return target;
         }
 
         /**
@@ -341,6 +379,155 @@ public  class SimpleProxyTunnel {
             return filtered;
         }
 
+        private List<Header> filterDirectHeaders(List<Header> headers) {
+            List<Header> filtered = new ArrayList<>();
+            for (Header header : headers) {
+                if (header.nameEquals("Proxy-Authorization") || header.nameEquals("Proxy-Connection")) {
+                    continue;
+                }
+                filtered.add(header);
+            }
+            return filtered;
+        }
+
+        private DirectRoute resolveDirectRoute(HttpRequestHead request) {
+            if (config.noProxyMatcher() == null) {
+                return null;
+            }
+            if ("CONNECT".equalsIgnoreCase(request.method())) {
+                HostPort target = parseConnectTarget(request.target());
+                if (target == null || !config.noProxyMatcher().matches(target.host())) {
+                    return null;
+                }
+                return new DirectRoute(target.host(), target.port(), true, request.startLine());
+            }
+
+            ParsedHttpTarget target = parseHttpTarget(request);
+            if (target == null || !config.noProxyMatcher().matches(target.host())) {
+                return null;
+            }
+            return new DirectRoute(target.host(), target.port(), false, target.rewrittenStartLine());
+        }
+
+        private HostPort parseConnectTarget(String target) {
+            if (target == null || target.isBlank()) {
+                return null;
+            }
+            String raw = target.trim();
+            if (raw.startsWith("[")) {
+                int rightBracket = raw.indexOf(']');
+                if (rightBracket <= 1) {
+                    return null;
+                }
+                String host = raw.substring(1, rightBracket);
+                int port = 443;
+                if (rightBracket + 1 < raw.length() && raw.charAt(rightBracket + 1) == ':') {
+                    Integer parsedPort = parsePort(raw.substring(rightBracket + 2));
+                    if (parsedPort == null) {
+                        return null;
+                    }
+                    port = parsedPort;
+                }
+                return new HostPort(host, port);
+            }
+
+            int colon = raw.lastIndexOf(':');
+            if (colon > 0) {
+                Integer parsedPort = parsePort(raw.substring(colon + 1));
+                if (parsedPort == null) {
+                    return null;
+                }
+                return new HostPort(raw.substring(0, colon), parsedPort);
+            }
+            return new HostPort(raw, 443);
+        }
+
+        private ParsedHttpTarget parseHttpTarget(HttpRequestHead request) {
+            String[] parts = request.startLine().split(" ", 3);
+            if (parts.length < 3) {
+                return null;
+            }
+            String method = parts[0];
+            String target = parts[1];
+            String version = parts[2];
+
+            if (target.startsWith("http://") || target.startsWith("https://")) {
+                try {
+                    URI uri = new URI(target);
+                    String host = uri.getHost();
+                    if (host == null || host.isBlank()) {
+                        return null;
+                    }
+                    int port = uri.getPort();
+                    if (port <= 0) {
+                        port = "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+                    }
+                    String path = uri.getRawPath();
+                    if (path == null || path.isBlank()) {
+                        path = "/";
+                    }
+                    if (uri.getRawQuery() != null && !uri.getRawQuery().isBlank()) {
+                        path = path + "?" + uri.getRawQuery();
+                    }
+                    return new ParsedHttpTarget(host, port, method + " " + path + " " + version);
+                } catch (Exception ignored) {
+                    return null;
+                }
+            }
+
+            HostPort hostPort = parseHostHeader(request.firstHeaderValue("Host"));
+            if (hostPort == null) {
+                return null;
+            }
+            return new ParsedHttpTarget(hostPort.host(), hostPort.port(), request.startLine());
+        }
+
+        private HostPort parseHostHeader(String hostHeader) {
+            if (hostHeader == null || hostHeader.isBlank()) {
+                return null;
+            }
+            String raw = hostHeader.trim();
+            if (raw.startsWith("[")) {
+                int rightBracket = raw.indexOf(']');
+                if (rightBracket <= 1) {
+                    return null;
+                }
+                String host = raw.substring(1, rightBracket);
+                int port = 80;
+                if (rightBracket + 1 < raw.length() && raw.charAt(rightBracket + 1) == ':') {
+                    Integer parsedPort = parsePort(raw.substring(rightBracket + 2));
+                    if (parsedPort == null) {
+                        return null;
+                    }
+                    port = parsedPort;
+                }
+                return new HostPort(host, port);
+            }
+
+            int firstColon = raw.indexOf(':');
+            int lastColon = raw.lastIndexOf(':');
+            if (firstColon > 0 && firstColon == lastColon) {
+                Integer parsedPort = parsePort(raw.substring(lastColon + 1));
+                if (parsedPort == null) {
+                    return null;
+                }
+                return new HostPort(raw.substring(0, lastColon), parsedPort);
+            }
+            return new HostPort(raw, 80);
+        }
+
+        private Integer parsePort(String value) {
+            try {
+                int port = Integer.parseInt(value.trim());
+                if (port >= 1 && port <= 65535) {
+                    return port;
+                }
+                return null;
+            } catch (NumberFormatException ex) {
+                return null;
+            }
+        }
+
         /**
          * Sends an HTTP error response to the client.
          * 
@@ -382,6 +569,25 @@ public  class SimpleProxyTunnel {
             clientOut.write(response.getBytes(StandardCharsets.ISO_8859_1));
             clientOut.flush();
         }
+
+        private void sendConnectEstablished(OutputStream clientOut, String serverName) throws IOException {
+            String response = "HTTP/1.1 200 Connection Established\r\n" +
+                    "Date: " + HttpRequestHead.httpDate() + "\r\n" +
+                    "Server: " + serverName + "\r\n" +
+                    "Connection: keep-alive\r\n" +
+                    "Proxy-Connection: keep-alive\r\n\r\n";
+            clientOut.write(response.getBytes(StandardCharsets.ISO_8859_1));
+            clientOut.flush();
+        }
+
+        private record HostPort(String host, int port) {
+        }
+
+        private record ParsedHttpTarget(String host, int port, String rewrittenStartLine) {
+        }
+
+        private record DirectRoute(String host, int port, boolean connectTunnel, String rewrittenStartLine) {
+        }
     }
     
     // ==================== Configuration Records ====================
@@ -406,6 +612,7 @@ public  class SimpleProxyTunnel {
      * @param headerMaxBytes Max bytes to read for HTTP headers (default: 32KB)
      * @param logLevel Logging verbosity
      * @param serverName Server name for HTTP headers
+     * @param noProxyMatcher Matcher for hosts and IPs that should bypass upstream proxy
      */
     private record Config(
             String listenHost,
@@ -421,7 +628,47 @@ public  class SimpleProxyTunnel {
             int bufferSize,
             int headerMaxBytes,
             LogLevel logLevel,
-            String serverName) {
+            String serverName,
+            NoProxyMatcher noProxyMatcher) {
+    }
+
+    private static final class NoProxyMatcher {
+        private final List<String> patterns;
+
+        NoProxyMatcher(String raw) {
+            if (raw == null || raw.isBlank()) {
+                this.patterns = List.of();
+                return;
+            }
+            this.patterns = Arrays.stream(raw.split(","))
+                    .map(String::trim)
+                    .filter(token -> !token.isEmpty())
+                    .map(token -> token.toLowerCase(Locale.ROOT))
+                    .toList();
+        }
+
+        boolean matches(String host) {
+            if (host == null || host.isBlank() || patterns.isEmpty()) {
+                return false;
+            }
+            String normalizedHost = host.toLowerCase(Locale.ROOT);
+            for (String pattern : patterns) {
+                if (pattern.startsWith("*.")) {
+                    String suffix = pattern.substring(2);
+                    if (normalizedHost.equals(suffix) || normalizedHost.endsWith("." + suffix)) {
+                        return true;
+                    }
+                } else if (pattern.endsWith(".*")) {
+                    String prefix = pattern.substring(0, pattern.length() - 2);
+                    if (normalizedHost.startsWith(prefix + ".")) {
+                        return true;
+                    }
+                } else if (normalizedHost.equals(pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     /**
@@ -701,6 +948,7 @@ public  class SimpleProxyTunnel {
                     "  --upstream.password=PASS    Password for upstream proxy auth\n" +
                     "  --listen.username=USER      Require basic auth on local listener\n" +
                     "  --listen.password=PASS      Password for local auth\n" +
+                    "  --no.proxy.hosts=LIST       Comma-separated hosts/IPs to bypass upstream\n" +
                     "  --log.level=LEVEL           ERROR|WARN|INFO|DEBUG\n" +
                     "  --help                      Show this message\n";
             System.out.println(help);
@@ -777,6 +1025,7 @@ public  class SimpleProxyTunnel {
             int headerLimit = parseInt(props, "header.maxBytes", 32 * 1024);
             LogLevel logLevel = LogLevel.from(props.getProperty("log.level", "INFO"));
             String serverName = props.getProperty("server.name", "simple-tunnel");
+            NoProxyMatcher noProxyMatcher = new NoProxyMatcher(props.getProperty("no.proxy.hosts", ""));
 
             return new Config(
                     listenHost,
@@ -792,7 +1041,8 @@ public  class SimpleProxyTunnel {
                     bufferSize,
                     headerLimit,
                     logLevel,
-                    serverName
+                    serverName,
+                    noProxyMatcher
             );
         }
 

@@ -5,6 +5,7 @@ import io.netty.channel.*;
 import io.netty.handler.codec.http.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import xzy.fz.handler.RelayHandler;
 import xzy.fz.log.AccessLog;
 
 import java.nio.charset.StandardCharsets;
@@ -34,6 +35,7 @@ public class DirectHttpForwardHandler extends SimpleChannelInboundHandler<FullHt
     private final AccessLog accessLog;
     private final long startTime;
     private final String clientAddress;
+    private final boolean upgradeRequested;
 
     /**
      * @param clientCtx       Client channel context
@@ -52,6 +54,7 @@ public class DirectHttpForwardHandler extends SimpleChannelInboundHandler<FullHt
         this.accessLog = accessLog;
         this.startTime = startTime;
         this.clientAddress = clientAddress;
+        this.upgradeRequested = originalRequest.headers().contains(HttpHeaderNames.UPGRADE);
     }
 
     /**
@@ -95,7 +98,56 @@ public class DirectHttpForwardHandler extends SimpleChannelInboundHandler<FullHt
         logAccess(response.status().code(), duration, contentLength, contentType);
 
         log.debug("Direct forwarding response {} to client", response.status());
-        clientCtx.writeAndFlush(clientResponse).addListener(future -> ctx.close());
+        ChannelFuture clientWrite = clientCtx.writeAndFlush(clientResponse);
+
+        if (upgradeRequested && response.status().code() == HttpResponseStatus.SWITCHING_PROTOCOLS.code()) {
+            log.debug("Direct HTTP protocol upgrade accepted; switching to raw relay mode");
+            switchToRelayMode(ctx);
+        } else {
+            clientWrite.addListener(future -> ctx.close());
+        }
+    }
+
+    /**
+     * Removes HTTP codecs after a successful protocol upgrade and relays all
+     * subsequent bytes bidirectionally.
+     */
+    private void switchToRelayMode(ChannelHandlerContext targetCtx) {
+        Channel clientChannel = clientCtx.channel();
+        Channel targetChannel = targetCtx.channel();
+
+        removeHandlerSafely(clientChannel.pipeline(), HttpRequestDecoder.class);
+        removeHandlerSafely(clientChannel.pipeline(), HttpResponseEncoder.class);
+        removeHandlerSafely(clientChannel.pipeline(), "http-proxy-handler");
+
+        targetChannel.pipeline().remove(this);
+
+        clientChannel.pipeline().addLast("relay", new RelayHandler(targetChannel));
+        targetChannel.pipeline().addLast("relay", new RelayHandler(clientChannel));
+
+        // Preserve WebSocket bytes that may have arrived in the same TCP packet
+        // as the 101 response. The decoder forwards them during this read cycle.
+        targetChannel.eventLoop().execute(() -> {
+            removeHandlerSafely(targetChannel.pipeline(), HttpClientCodec.class);
+            removeHandlerSafely(targetChannel.pipeline(), HttpObjectAggregator.class);
+        });
+    }
+
+    private void removeHandlerSafely(ChannelPipeline pipeline,
+                                     Class<? extends ChannelHandler> handlerType) {
+        try {
+            pipeline.remove(handlerType);
+        } catch (Exception ignored) {
+            // Handler may not be present in a test pipeline or may already be removed.
+        }
+    }
+
+    private void removeHandlerSafely(ChannelPipeline pipeline, String handlerName) {
+        try {
+            pipeline.remove(handlerName);
+        } catch (Exception ignored) {
+            // Handler may not be present in a test pipeline or may already be removed.
+        }
     }
 
     private void logAccess(int statusCode, long duration, long bytesWritten, String contentType) {

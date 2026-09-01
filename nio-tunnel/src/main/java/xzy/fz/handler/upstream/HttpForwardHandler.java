@@ -2,13 +2,13 @@ package xzy.fz.handler.upstream;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelFutureListener;
-import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.*;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.http.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
+import xzy.fz.handler.RelayHandler;
 import xzy.fz.log.AccessLog;
 
 import java.nio.charset.StandardCharsets;
@@ -44,6 +44,7 @@ public class HttpForwardHandler extends SimpleChannelInboundHandler<FullHttpResp
     private final AccessLog accessLog;
     private final long startTime;
     private final String clientAddress;
+    private final boolean upgradeRequested;
 
     /**
      * Creates a new HTTP forward handler.
@@ -63,6 +64,7 @@ public class HttpForwardHandler extends SimpleChannelInboundHandler<FullHttpResp
         this.accessLog = accessLog;
         this.startTime = startTime;
         this.clientAddress = clientAddress;
+        this.upgradeRequested = originalRequest.headers().contains(HttpHeaderNames.UPGRADE);
     }
 
     /**
@@ -118,10 +120,59 @@ public class HttpForwardHandler extends SimpleChannelInboundHandler<FullHttpResp
 
         log.debug("Forwarding response {} to client", response.status());
 
-        clientCtx.writeAndFlush(clientResponse).addListener(future -> {
-            // Close upstream connection after response is sent
-            ctx.close();
+        ChannelFuture clientWrite = clientCtx.writeAndFlush(clientResponse);
+
+        if (upgradeRequested && response.status().code() == HttpResponseStatus.SWITCHING_PROTOCOLS.code()) {
+            log.debug("HTTP protocol upgrade accepted; switching to raw relay mode");
+            switchToRelayMode(ctx);
+        } else {
+            // Ordinary HTTP forwarding handles one response per upstream connection.
+            clientWrite.addListener(future -> ctx.close());
+        }
+    }
+
+    /**
+     * Removes HTTP codecs after a successful protocol upgrade and relays all
+     * subsequent bytes bidirectionally. This supports WebSocket frames without
+     * interpreting or modifying them.
+     */
+    private void switchToRelayMode(ChannelHandlerContext upstreamCtx) {
+        Channel clientChannel = clientCtx.channel();
+        Channel upstreamChannel = upstreamCtx.channel();
+
+        removeHandlerSafely(clientChannel.pipeline(), HttpRequestDecoder.class);
+        removeHandlerSafely(clientChannel.pipeline(), HttpResponseEncoder.class);
+        removeHandlerSafely(clientChannel.pipeline(), "http-proxy-handler");
+
+        upstreamChannel.pipeline().remove(this);
+
+        clientChannel.pipeline().addLast("relay", new RelayHandler(upstreamChannel));
+        upstreamChannel.pipeline().addLast("relay", new RelayHandler(clientChannel));
+
+        // HttpClientCodec may already have decoded WebSocket bytes that arrived in
+        // the same TCP packet as the 101 response. Keep the HTTP handlers in place
+        // until the current read cycle has forwarded those bytes to the new relay.
+        upstreamChannel.eventLoop().execute(() -> {
+            removeHandlerSafely(upstreamChannel.pipeline(), HttpClientCodec.class);
+            removeHandlerSafely(upstreamChannel.pipeline(), HttpObjectAggregator.class);
         });
+    }
+
+    private void removeHandlerSafely(ChannelPipeline pipeline,
+                                     Class<? extends ChannelHandler> handlerType) {
+        try {
+            pipeline.remove(handlerType);
+        } catch (Exception ignored) {
+            // Handler may not be present in a test pipeline or may already be removed.
+        }
+    }
+
+    private void removeHandlerSafely(ChannelPipeline pipeline, String handlerName) {
+        try {
+            pipeline.remove(handlerName);
+        } catch (Exception ignored) {
+            // Handler may not be present in a test pipeline or may already be removed.
+        }
     }
 
     /**

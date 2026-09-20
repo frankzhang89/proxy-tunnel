@@ -5,6 +5,7 @@ A high-performance NIO-based HTTP and SOCKS5 proxy using Netty that forwards tra
 ## Features
 - **Non-blocking I/O** - Built on Netty for high-performance async networking
 - **HTTP Proxy** - Supports CONNECT (HTTPS tunneling) and regular HTTP forwarding
+- **Streaming HTTP** - Streams request and response bodies, including large uploads/downloads, chunked trailers, `100 Continue`, and SSE; response bodies are not limited by `http.maxInitialBytes`
 - **WebSocket Proxy** - Supports `ws://` HTTP Upgrade and `wss://` tunneling
 - **SOCKS5 Proxy** - Full SOCKS5 protocol support with optional authentication
 - **PAC File** - Auto-generates or serves custom Proxy Auto-Config files

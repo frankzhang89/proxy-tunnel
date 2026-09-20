@@ -22,6 +22,8 @@ import xzy.fz.log.AccessLog;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.Queue;
 
 /**
  * Netty handler for incoming HTTP proxy requests.
@@ -47,13 +49,18 @@ import java.nio.charset.StandardCharsets;
  *   |<========== Bidirectional raw byte relay =========================================|
  * </pre>
  */
-@ChannelHandler.Sharable
 public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
     private static final Logger log = LoggerFactory.getLogger(HttpProxyHandler.class);
 
     private final Config config;
     private final SslContext sslContext;
     private final AccessLog accessLog;
+    private final Queue<Object> pending = new ArrayDeque<>();
+    private Channel forwardChannel;
+    private boolean forwarding;
+    private boolean forwardReady;
+    private boolean requestComplete;
+    private boolean draining;
 
     /**
      * Creates a new HTTP proxy handler.
@@ -74,16 +81,117 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
      */
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (msg instanceof HttpRequest request) {
-            handleHttpRequest(ctx, request);
-        } else if (msg instanceof HttpContent) {
-            // For non-CONNECT requests, content chunks are handled by the relay
-            // after connection is established. Release here to prevent memory leaks.
-            ReferenceCountUtil.release(msg);
-        } else {
-            // Pass unknown messages to next handler
+        if (!(msg instanceof HttpObject)) {
             ctx.fireChannelRead(msg);
+            return;
         }
+        // The socket decoder normally emits separate headers and content. Also
+        // accept full requests without retaining their body through the exchange.
+        if (msg instanceof FullHttpRequest full) {
+            HttpRequest headers = new DefaultHttpRequest(full.protocolVersion(), full.method(), full.uri());
+            headers.headers().set(full.headers());
+            headers.setDecoderResult(full.decoderResult());
+            pending.add(headers);
+            LastHttpContent body = new DefaultLastHttpContent(full.content().retain());
+            body.trailingHeaders().set(full.trailingHeaders());
+            pending.add(body);
+            full.release();
+        } else {
+            pending.add(msg);
+        }
+        drainPending(ctx);
+    }
+
+    private void drainPending(ChannelHandlerContext ctx) {
+        if (draining) return;
+        draining = true;
+        try {
+            while (ctx.channel().isActive() && !pending.isEmpty()) {
+                if (forwarding) {
+                    if (!forwardReady || requestComplete || !forwardChannel.isWritable()) break;
+                    Object msg = pending.remove();
+                    if (!(msg instanceof HttpContent content) || !content.decoderResult().isSuccess()) {
+                        ReferenceCountUtil.release(msg);
+                        ctx.close();
+                        break;
+                    }
+                    requestComplete = content instanceof LastHttpContent;
+                    forwardChannel.writeAndFlush(content).addListener(future -> {
+                        if (!future.isSuccess()) ctx.close();
+                    });
+                } else {
+                    Object msg = pending.remove();
+                    if (msg instanceof HttpRequest request) {
+                        if (!request.decoderResult().isSuccess()) {
+                            sendError(ctx, HttpResponseStatus.BAD_REQUEST, "Invalid HTTP request");
+                            break;
+                        }
+                        handleHttpRequest(ctx, request);
+                    } else {
+                        ReferenceCountUtil.release(msg);
+                    }
+                }
+            }
+        } finally {
+            draining = false;
+            // Pause during connect, while the destination is congested, and
+            // between exchanges. Only already-decoded bytes need to be queued.
+            ctx.channel().config().setAutoRead(!forwarding ||
+                    (forwardReady && !requestComplete && forwardChannel.isWritable()));
+        }
+    }
+
+    public void forwardReady(ChannelHandlerContext clientCtx, Channel channel) {
+        if (!clientCtx.channel().isActive()) {
+            channel.close();
+            return;
+        }
+        forwardChannel = channel;
+        forwardReady = true;
+        drainPending(clientCtx);
+    }
+
+    public void forwardWritabilityChanged(ChannelHandlerContext clientCtx) {
+        drainPending(clientCtx);
+    }
+
+    public boolean isRequestComplete() {
+        return requestComplete;
+    }
+
+    public void forwardComplete(ChannelHandlerContext clientCtx) {
+        forwarding = false;
+        forwardReady = false;
+        forwardChannel = null;
+        requestComplete = false;
+        drainPending(clientCtx);
+    }
+
+    @Override
+    public void channelWritabilityChanged(ChannelHandlerContext ctx) {
+        if (forwardChannel != null) {
+            forwardChannel.config().setAutoRead(ctx.channel().isWritable());
+        }
+        ctx.fireChannelWritabilityChanged();
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        if (forwardChannel != null) forwardChannel.close();
+        releasePending();
+        ctx.fireChannelInactive();
+    }
+
+    @Override
+    public void handlerRemoved(ChannelHandlerContext ctx) {
+        releasePending();
+        // Upgrade removes this handler and transfers ownership to RelayHandler.
+        ctx.channel().config().setAutoRead(true);
+    }
+
+    private void releasePending() {
+        Object msg;
+        while ((msg = pending.poll()) != null) ReferenceCountUtil.release(msg);
     }
 
     /**
@@ -240,6 +348,8 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
      * Otherwise forwards via the upstream proxy.
      */
     private void handleHttpForward(ChannelHandlerContext ctx, HttpRequest request) {
+        forwarding = true;
+        ctx.channel().config().setAutoRead(false);
         // Capture start time for access log
         long startTime = System.currentTimeMillis();
         String clientAddress = extractClientAddress(ctx);
@@ -288,7 +398,6 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
                     protected void initChannel(SocketChannel ch) {
                         ChannelPipeline p = ch.pipeline();
                         p.addLast(new HttpClientCodec());
-                        p.addLast(new HttpObjectAggregator(config.httpMaxInitialBytes()));
                         p.addLast(new DirectHttpForwardHandler(ctx, request, relativeUri,
                                 accessLog, startTime, clientAddress));
                     }
@@ -296,7 +405,9 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
 
         final String finalHost = host;
         final int finalPort = port;
-        bootstrap.connect(host, port).addListener((ChannelFutureListener) future -> {
+        ChannelFuture connect = bootstrap.connect(host, port);
+        forwardChannel = connect.channel();
+        connect.addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
                 log.error("Direct HTTP forward to {}:{} failed: {}", finalHost, finalPort,
                         future.cause().getMessage());
@@ -327,21 +438,20 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
                         }
                         // HTTP codec for upstream communication
                         p.addLast(new HttpClientCodec());
-                        // Aggregator for response handling
-                        p.addLast(new HttpObjectAggregator(config.httpMaxInitialBytes()));
                         // Handler to forward request and relay response
                         p.addLast(new HttpForwardHandler(ctx, request, config,
                                 accessLog, startTime, clientAddress));
                     }
                 });
 
-        bootstrap.connect(config.upstreamHost(), config.upstreamPort())
-                .addListener((ChannelFutureListener) future -> {
-                    if (!future.isSuccess()) {
-                        log.error("Failed to connect to upstream: {}", future.cause().getMessage());
-                        sendError(ctx, HttpResponseStatus.BAD_GATEWAY, "Failed to connect to upstream proxy");
-                    }
-                });
+        ChannelFuture connect = bootstrap.connect(config.upstreamHost(), config.upstreamPort());
+        forwardChannel = connect.channel();
+        connect.addListener((ChannelFutureListener) future -> {
+            if (!future.isSuccess()) {
+                log.error("Failed to connect to upstream: {}", future.cause().getMessage());
+                sendError(ctx, HttpResponseStatus.BAD_GATEWAY, "Failed to connect to upstream proxy");
+            }
+        });
     }
 
     /**

@@ -1,206 +1,30 @@
 package xzy.fz.handler.upstream;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
-import io.netty.channel.*;
-import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
-import xzy.fz.handler.RelayHandler;
 import xzy.fz.log.AccessLog;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
-
-/**
- * Handles forwarding regular HTTP requests (non-CONNECT) to upstream proxy.
- * <p>
- * This handler is used for HTTP methods like GET, POST, PUT, DELETE, etc.
- * It forwards the request to the upstream proxy and relays the response back.
- *
- * <h2>Flow:</h2>
- * <ol>
- *   <li>On channel activation, forwards modified request to upstream</li>
- *   <li>Receives response from upstream</li>
- *   <li>Forwards response to client</li>
- *   <li>Closes the upstream connection</li>
- * </ol>
- *
- * <h2>Request Modifications:</h2>
- * <ul>
- *   <li>Removes client's Proxy-Authorization header</li>
- *   <li>Adds upstream Proxy-Authorization if configured</li>
- *   <li>Adds Proxy-Connection: keep-alive header</li>
- * </ul>
- */
-public class HttpForwardHandler extends SimpleChannelInboundHandler<FullHttpResponse> {
-    private static final Logger log = LoggerFactory.getLogger(HttpForwardHandler.class);
-
-    private final ChannelHandlerContext clientCtx;
-    private final HttpRequest originalRequest;
+/** Streams an HTTP exchange through the configured upstream proxy. */
+public class HttpForwardHandler extends StreamingHttpForwardHandler {
     private final Config config;
-    private final AccessLog accessLog;
-    private final long startTime;
-    private final String clientAddress;
-    private final boolean upgradeRequested;
 
-    /**
-     * Creates a new HTTP forward handler.
-     *
-     * @param clientCtx       Client channel context
-     * @param originalRequest Original HTTP request from client
-     * @param config          Proxy configuration
-     * @param accessLog       Access log instance (may be null)
-     * @param startTime       Request start time for duration calculation
-     * @param clientAddress   Client IP address for logging
-     */
-    public HttpForwardHandler(ChannelHandlerContext clientCtx, HttpRequest originalRequest,
-                               Config config, AccessLog accessLog, long startTime, String clientAddress) {
-        this.clientCtx = clientCtx;
-        this.originalRequest = originalRequest;
+    public HttpForwardHandler(ChannelHandlerContext clientCtx, HttpRequest request, Config config,
+                              AccessLog accessLog, long startTime, String clientAddress) {
+        super(clientCtx, request, accessLog, startTime, clientAddress);
         this.config = config;
-        this.accessLog = accessLog;
-        this.startTime = startTime;
-        this.clientAddress = clientAddress;
-        this.upgradeRequested = originalRequest.headers().contains(HttpHeaderNames.UPGRADE);
     }
 
-    /**
-     * Called when upstream connection is established.
-     * Forwards the modified HTTP request to upstream.
-     */
     @Override
-    public void channelActive(ChannelHandlerContext ctx) {
-        // Build the forwarded request
-        DefaultFullHttpRequest forwardRequest = new DefaultFullHttpRequest(
-                originalRequest.protocolVersion(),
-                originalRequest.method(),
-                originalRequest.uri());
-
-        // Copy headers, filtering out client proxy-auth
-        for (Map.Entry<String, String> header : originalRequest.headers()) {
-            if (!header.getKey().equalsIgnoreCase("Proxy-Authorization")) {
-                forwardRequest.headers().set(header.getKey(), header.getValue());
-            }
-        }
-
-        // Add upstream authentication if configured
+    protected HttpRequest forwardRequest() {
+        HttpRequest request = new DefaultHttpRequest(originalRequest.protocolVersion(),
+                originalRequest.method(), originalRequest.uri());
+        request.headers().set(originalRequest.headers());
+        request.headers().remove(HttpHeaderNames.PROXY_AUTHORIZATION);
         if (config.expectedUpstreamAuthHeader() != null) {
-            forwardRequest.headers().set(HttpHeaderNames.PROXY_AUTHORIZATION,
-                    config.expectedUpstreamAuthHeader());
+            request.headers().set(HttpHeaderNames.PROXY_AUTHORIZATION, config.expectedUpstreamAuthHeader());
         }
-
-        // Add proxy-connection header
-        forwardRequest.headers().set("Proxy-Connection", "keep-alive");
-
-        log.debug("Forwarding {} {} to upstream", originalRequest.method(), originalRequest.uri());
-        ctx.writeAndFlush(forwardRequest);
-    }
-
-    /**
-     * Receives response from upstream and forwards to client.
-     */
-    @Override
-    protected void channelRead0(ChannelHandlerContext ctx, FullHttpResponse response) {
-        // Forward response to client
-        // Note: retain() the content because we're passing it to another channel
-        FullHttpResponse clientResponse = new DefaultFullHttpResponse(
-                response.protocolVersion(),
-                response.status(),
-                response.content().retain());
-        clientResponse.headers().set(response.headers());
-
-        // Log access
-        long duration = System.currentTimeMillis() - startTime;
-        int contentLength = response.content().readableBytes();
-        String contentType = response.headers().get(HttpHeaderNames.CONTENT_TYPE);
-        logAccess(response.status().code(), duration, contentLength, contentType);
-
-        log.debug("Forwarding response {} to client", response.status());
-
-        ChannelFuture clientWrite = clientCtx.writeAndFlush(clientResponse);
-
-        if (upgradeRequested && response.status().code() == HttpResponseStatus.SWITCHING_PROTOCOLS.code()) {
-            log.debug("HTTP protocol upgrade accepted; switching to raw relay mode");
-            switchToRelayMode(ctx);
-        } else {
-            // Ordinary HTTP forwarding handles one response per upstream connection.
-            clientWrite.addListener(future -> ctx.close());
-        }
-    }
-
-    /**
-     * Removes HTTP codecs after a successful protocol upgrade and relays all
-     * subsequent bytes bidirectionally. This supports WebSocket frames without
-     * interpreting or modifying them.
-     */
-    private void switchToRelayMode(ChannelHandlerContext upstreamCtx) {
-        Channel clientChannel = clientCtx.channel();
-        Channel upstreamChannel = upstreamCtx.channel();
-
-        removeHandlerSafely(clientChannel.pipeline(), HttpRequestDecoder.class);
-        removeHandlerSafely(clientChannel.pipeline(), HttpResponseEncoder.class);
-        removeHandlerSafely(clientChannel.pipeline(), "http-proxy-handler");
-
-        upstreamChannel.pipeline().remove(this);
-
-        clientChannel.pipeline().addLast("relay", new RelayHandler(upstreamChannel));
-        upstreamChannel.pipeline().addLast("relay", new RelayHandler(clientChannel));
-
-        // HttpClientCodec may already have decoded WebSocket bytes that arrived in
-        // the same TCP packet as the 101 response. Keep the HTTP handlers in place
-        // until the current read cycle has forwarded those bytes to the new relay.
-        upstreamChannel.eventLoop().execute(() -> {
-            removeHandlerSafely(upstreamChannel.pipeline(), HttpClientCodec.class);
-            removeHandlerSafely(upstreamChannel.pipeline(), HttpObjectAggregator.class);
-        });
-    }
-
-    private void removeHandlerSafely(ChannelPipeline pipeline,
-                                     Class<? extends ChannelHandler> handlerType) {
-        try {
-            pipeline.remove(handlerType);
-        } catch (Exception ignored) {
-            // Handler may not be present in a test pipeline or may already be removed.
-        }
-    }
-
-    private void removeHandlerSafely(ChannelPipeline pipeline, String handlerName) {
-        try {
-            pipeline.remove(handlerName);
-        } catch (Exception ignored) {
-            // Handler may not be present in a test pipeline or may already be removed.
-        }
-    }
-
-    /**
-     * Logs access to the access log.
-     */
-    private void logAccess(int statusCode, long duration, long bytesWritten, String contentType) {
-        if (accessLog != null) {
-            accessLog.logHttpForward(clientAddress, originalRequest.method().name(),
-                    originalRequest.uri(), statusCode, duration, bytesWritten, contentType);
-        }
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        log.error("HTTP forward error: {}", cause.getMessage());
-        ctx.close();
-
-        // Send error to client if still active
-        if (clientCtx.channel().isActive()) {
-            ByteBuf content = Unpooled.copiedBuffer(
-                    "<html><body><h1>Bad Gateway</h1></body></html>", StandardCharsets.UTF_8);
-            FullHttpResponse response = new DefaultFullHttpResponse(
-                    HttpVersion.HTTP_1_1, HttpResponseStatus.BAD_GATEWAY, content);
-            response.headers()
-                    .set(HttpHeaderNames.CONTENT_TYPE, "text/html; charset=utf-8")
-                    .set(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes())
-                    .set(HttpHeaderNames.CONNECTION, HttpHeaderValues.CLOSE);
-            clientCtx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
-        }
+        request.headers().set("Proxy-Connection", "keep-alive");
+        return request;
     }
 }

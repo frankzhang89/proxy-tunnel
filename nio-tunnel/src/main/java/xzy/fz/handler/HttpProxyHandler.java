@@ -236,11 +236,16 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
      * Otherwise connects via the upstream HTTPS proxy.
      */
     private void handleConnect(ChannelHandlerContext ctx, HttpRequest request) {
-        // Parse target from CONNECT request (e.g., "example.com:443")
-        String target = request.uri();
-        String[] parts = target.split(":");
-        String targetHost = parts[0];
-        int targetPort = parts.length > 1 ? Integer.parseInt(parts[1]) : 443;
+        // Parse target from CONNECT request (e.g., "example.com:443" or "[2001:db8::1]:443")
+        ConnectTarget parsed = parseConnectTarget(request.uri());
+        if (parsed == null) {
+            log.info("CONNECT {} rejected: invalid target", request.uri());
+            sendError(ctx, HttpResponseStatus.BAD_REQUEST, "Invalid CONNECT target");
+            return;
+        }
+        String targetHost = parsed.host();
+        int targetPort = parsed.port();
+        String target = hostPort(targetHost, targetPort);
 
         // Capture start time for access log
         long startTime = System.currentTimeMillis();
@@ -253,6 +258,66 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
             log.info("CONNECT {} via upstream {}:{}", target, config.upstreamHost(), config.upstreamPort());
             handleConnectViaUpstream(ctx, targetHost, targetPort, startTime, clientAddress);
         }
+    }
+
+    /** Parsed CONNECT authority (RFC 7231 host:port, with IPv6 literal support). */
+    private record ConnectTarget(String host, int port) {
+    }
+
+    /**
+     * Parses a CONNECT request authority. Accepts "host:port", "host" (default port 443),
+     * "[IPv6-literal]" and "[IPv6-literal]:port".
+     *
+     * @return parsed target, or null if the URI is malformed (non-numeric/out-of-range port, empty host, etc.)
+     */
+    static ConnectTarget parseConnectTarget(String uri) {
+        if (uri == null) return null;
+        String s = uri.trim();
+        // Tolerate clients that send a scheme in CONNECT (non-conformant)
+        int scheme = s.indexOf("://");
+        if (scheme >= 0) s = s.substring(scheme + 3);
+        int slash = s.indexOf('/');
+        if (slash >= 0) s = s.substring(0, slash);
+
+        String host;
+        int port = 443; // default only when no explicit port is present
+
+        if (s.startsWith("[")) {
+            // IPv6 literal: [::1] or [::1]:443
+            int end = s.indexOf(']');
+            if (end < 0) return null;
+            host = s.substring(1, end);
+            if (end + 1 < s.length()) {
+                if (s.charAt(end + 1) != ':') return null;
+                try {
+                    port = Integer.parseInt(s.substring(end + 2));
+                } catch (NumberFormatException e) {
+                    return null;
+                }
+            }
+        } else {
+            int colon = s.lastIndexOf(':');
+            if (colon < 0) {
+                host = s;
+            } else {
+                host = s.substring(0, colon);
+                try {
+                    port = Integer.parseInt(s.substring(colon + 1));
+                } catch (NumberFormatException e) {
+                    return null;
+                }
+            }
+        }
+
+        if (host.isEmpty() || port < 1 || port > 65535) return null;
+        return new ConnectTarget(host, port);
+    }
+
+    /**
+     * Formats host:port, bracketing IPv6 literals (e.g. "[::1]:443").
+     */
+    public static String hostPort(String host, int port) {
+        return host != null && host.contains(":") ? "[" + host + "]:" + port : host + ":" + port;
     }
 
     /**

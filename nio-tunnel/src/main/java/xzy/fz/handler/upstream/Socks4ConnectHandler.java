@@ -6,6 +6,7 @@ import io.netty.handler.codec.socksx.v4.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
+import xzy.fz.handler.HttpProxyHandler;
 import xzy.fz.handler.RelayHandler;
 import xzy.fz.log.AccessLog;
 
@@ -68,10 +69,11 @@ public class Socks4ConnectHandler extends SimpleChannelInboundHandler<FullHttpRe
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
         // Build HTTP CONNECT request
+        String target = HttpProxyHandler.hostPort(targetHost, targetPort);
         FullHttpRequest connectRequest = new DefaultFullHttpRequest(
-                HttpVersion.HTTP_1_1, HttpMethod.CONNECT, targetHost + ":" + targetPort);
+                HttpVersion.HTTP_1_1, HttpMethod.CONNECT, target);
         connectRequest.headers()
-                .set(HttpHeaderNames.HOST, targetHost + ":" + targetPort)
+                .set(HttpHeaderNames.HOST, target)
                 .set("Proxy-Connection", "keep-alive");
 
         // Add upstream proxy authentication if configured

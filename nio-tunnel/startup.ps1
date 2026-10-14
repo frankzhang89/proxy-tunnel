@@ -6,6 +6,8 @@ if ($AppArguments.Count -gt 0 -and !$AppArguments[0].StartsWith('--')) {
     $Action = $AppArguments[0].ToLowerInvariant()
     $AppArguments = @($AppArguments | Select-Object -Skip 1)
 }
+# Keep access records in their configured file; explicit CLI options can override this default.
+$AppArguments = @('--access.log.console=false') + $AppArguments
 $ScriptDirectory = $PSScriptRoot
 Set-Location -LiteralPath $ScriptDirectory
 $PidFile = Join-Path $ScriptDirectory 'nio-tunnel.pid'
@@ -236,7 +238,8 @@ function Start-Tunnel {
         throw 'Required listener ports are occupied. No process was stopped.'
     }
     $null = New-Item -ItemType Directory -Path $LogDirectory -Force
-    $NativeArguments = @('-jar', $JarPath) + $AppArguments
+    # Send SLF4J runtime messages to stdout, which is captured in nio-tunnel.log.
+    $NativeArguments = @('-Dorg.slf4j.simpleLogger.logFile=System.out', '-jar', $JarPath) + $AppArguments
     $CommandLine = ($NativeArguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' '
     Write-Host 'Starting nio-tunnel...'
     $Process = Start-DetachedJava $Java $CommandLine
@@ -269,7 +272,7 @@ function Start-Tunnel {
     Write-Host "HTTP: $($Config.LISTEN_HOST):$($Config.HTTP_PORT)"
     Write-Host "SOCKS: $($Config.LISTEN_HOST):$($Config.SOCKS_PORT)"
     Write-Host "Upstream: $($Config.UPSTREAM_HOST):$($Config.UPSTREAM_PORT)"
-    Write-Host "Console log: $OutLog"
+    Write-Host "Runtime log: $OutLog"
     Write-Host "Error log: $ErrorLog"
     Write-Host "Access log: $($Config.ACCESS_LOG)"
 }

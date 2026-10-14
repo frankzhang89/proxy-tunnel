@@ -77,8 +77,12 @@ chmod +x startup.sh
   appropriate privileges to see them.
 - Startup succeeds only when the new PID owns both listeners. The summary includes
   PID, ports, upstream, and log paths; it does not test upstream connectivity.
-  Console/error logs go to `logs/nio-tunnel.log` and `logs/nio-tunnel-error.log`
-  and are overwritten on each start. The access log follows `access.log.file`.
+  SLF4J runtime messages (startup, info, warnings, and logged exceptions) and stdout
+  go to `logs/nio-tunnel.log`; raw stderr, including uncaught exceptions, goes to
+  `logs/nio-tunnel-error.log`. Both are overwritten on each start. The access log
+  still follows `access.log.file` and appends to the existing file. Launchers default
+  to `--access.log.console=false` to avoid duplicating access records in the runtime
+  log; explicitly passing `--access.log.console=true` restores console mirroring.
 - Success waits five seconds or a keypress; failure waits for a keypress.
   With redirected input, failure exits immediately and success waits five seconds.
   Java stays in the background. Existing terminals stay open; a double-clicked

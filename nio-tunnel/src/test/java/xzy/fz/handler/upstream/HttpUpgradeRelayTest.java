@@ -11,7 +11,6 @@ import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpHeaderValues;
 import io.netty.handler.codec.http.HttpMethod;
-import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpRequestDecoder;
 import io.netty.handler.codec.http.HttpResponseEncoder;
@@ -98,7 +97,9 @@ class HttpUpgradeRelayTest {
         assertNull(clientChannel.pipeline().context(HttpResponseEncoder.class));
         assertNotNull(clientChannel.pipeline().context(RelayHandler.class));
         assertNotNull(serverChannel.pipeline().context(RelayHandler.class));
-        assertBufferEquals(firstServerFrame, clientChannel.readOutbound());
+        // Streaming headers and LastHttpContent are separate writes. The HTTP
+        // encoder can emit an empty buffer for the latter (zero bytes on TCP).
+        assertBufferEquals(firstServerFrame, readNonEmptyOutbound(clientChannel));
 
         ByteBuf serverFrame = Unpooled.wrappedBuffer(new byte[]{(byte) 0x81, 0x02, 'o', 'k'});
         serverChannel.writeInbound(serverFrame);
@@ -112,7 +113,6 @@ class HttpUpgradeRelayTest {
     private static EmbeddedChannel newServerChannel(ChannelHandler handler) {
         return new EmbeddedChannel(
                 new HttpClientCodec(),
-                new HttpObjectAggregator(65536),
                 handler);
     }
 
@@ -148,6 +148,15 @@ class HttpUpgradeRelayTest {
         } finally {
             buffer.release();
         }
+    }
+
+    private static ByteBuf readNonEmptyOutbound(EmbeddedChannel channel) {
+        ByteBuf buffer;
+        while ((buffer = channel.readOutbound()) != null) {
+            if (buffer.isReadable()) return buffer;
+            buffer.release();
+        }
+        throw new AssertionError("Expected outbound bytes");
     }
 
     private static void releaseAllOutbound(EmbeddedChannel channel) {

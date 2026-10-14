@@ -5,8 +5,10 @@ import org.slf4j.LoggerFactory;
 import xzy.fz.util.NoProxyMatcher;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 
 /**
  * Immutable configuration record for nio-tunnel.
@@ -105,5 +107,47 @@ public record Config(
                 return "SOCKS5 %s:%d; PROXY %s:%d; DIRECT";
             }
             """.formatted(pacHost, socksPort, pacHost, listenPort);
+    }
+
+    /**
+     * Overrides the record-generated toString to avoid leaking credentials:
+     * Basic auth headers are rendered with the username kept and the password
+     * masked as "****".
+     */
+    @Override
+    public String toString() {
+        return "Config{listenHost=" + listenHost
+                + ", listenPort=" + listenPort
+                + ", socksPort=" + socksPort
+                + ", requireClientAuth=" + requireClientAuth
+                + ", clientAuth=" + maskAuth(expectedClientAuthHeader)
+                + ", upstreamHost=" + upstreamHost
+                + ", upstreamPort=" + upstreamPort
+                + ", upstreamTls=" + upstreamTls
+                + ", upstreamAuth=" + maskAuth(expectedUpstreamAuthHeader)
+                + ", connectTimeoutMillis=" + connectTimeoutMillis
+                + ", httpMaxInitialBytes=" + httpMaxInitialBytes
+                + ", pacEnabled=" + pacEnabled
+                + ", pacPath=" + pacPath
+                + ", accessLogEnabled=" + accessLogEnabled
+                + ", noProxyMatcher=" + noProxyMatcher
+                + "}";
+    }
+
+    /**
+     * Renders a Basic auth header for logging, keeping the username but
+     * replacing the password with "****".
+     */
+    private static String maskAuth(String basicHeader) {
+        if (basicHeader == null) return "none";
+        try {
+            String token = basicHeader.substring("Basic ".length());
+            String decoded = new String(Base64.getDecoder().decode(token), StandardCharsets.UTF_8);
+            int colon = decoded.indexOf(':');
+            String user = colon >= 0 ? decoded.substring(0, colon) : decoded;
+            return "Basic " + user + ":****";
+        } catch (RuntimeException e) {
+            return "Basic ****";
+        }
     }
 }

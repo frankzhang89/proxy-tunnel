@@ -1,0 +1,3 @@
+# Keep the Linux entry point usable after a checkout on Windows.
+/startup.sh text eol=lf
+/startup.bat text eol=crlf

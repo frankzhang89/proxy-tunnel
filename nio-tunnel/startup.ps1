@@ -1,6 +1,7 @@
 # Invoked by startup.bat; arguments after the optional action are passed to Java.
 $ErrorActionPreference = 'Stop'
 $AppArguments = @($args)
+$ShowActionMenu = $AppArguments.Count -eq 0
 $Action = 'restart'
 if ($AppArguments.Count -gt 0 -and !$AppArguments[0].StartsWith('--')) {
     $Action = $AppArguments[0].ToLowerInvariant()
@@ -17,6 +18,81 @@ $OutLog = Join-Path $LogDirectory 'nio-tunnel.log'
 $ErrorLog = Join-Path $LogDirectory 'nio-tunnel-error.log'
 $OperationLock = $null
 $ExitCode = 0
+
+function Select-Action {
+    # Keep automation noninteractive; only an argument-free console opens the menu.
+    try { $Interactive = ![Console]::IsInputRedirected; $null = [Console]::KeyAvailable }
+    catch { $Interactive = $false }
+    if (!$Interactive) { Write-Host 'No interactive console. Using restart.'; return 'restart' }
+
+    $Actions = @('restart', 'stop', 'start')
+    $Selected = 0
+    $PreviousSelection = -1
+    $PreviousRemaining = -1
+    Write-Host 'nio-tunnel: select an action'
+    Write-Host 'Use arrow keys or 1/2/3 to select. Enter confirms.'
+    Write-Host 'The selected action runs after 5 seconds. Keys do not reset the timer.'
+    # Reserve three option rows and one status row before recording their position.
+    1..4 | ForEach-Object { Write-Host '' }
+    $MenuTop = [Console]::CursorTop - 4
+    $Foreground = [Console]::ForegroundColor
+    $Background = [Console]::BackgroundColor
+    # Customize the selected row's background and text colors here.
+    $SelectionBackground = [ConsoleColor]::DarkCyan
+    $SelectionForeground = [ConsoleColor]::White
+    $CursorVisible = [Console]::CursorVisible
+    $Timer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        [Console]::CursorVisible = $false
+        while ($true) {
+            $Remaining = [Math]::Max(0, [Math]::Ceiling(5 - $Timer.Elapsed.TotalSeconds))
+            if ($Selected -ne $PreviousSelection -or $Remaining -ne $PreviousRemaining) {
+                $Width = [Math]::Min(48, [Console]::BufferWidth - 1)
+                for ($Index = 0; $Index -lt $Actions.Count; $Index++) {
+                    [Console]::SetCursorPosition(0, $MenuTop + $Index)
+                    [Console]::BackgroundColor = $Background
+                    [Console]::ForegroundColor = $Foreground
+                    if ($Index -eq $Selected) {
+                        [Console]::BackgroundColor = $SelectionBackground
+                        [Console]::ForegroundColor = $SelectionForeground
+                    }
+                    [Console]::Write(('  [{0}] {1}' -f ($Index + 1), $Actions[$Index]).PadRight($Width))
+                }
+                [Console]::BackgroundColor = $Background
+                [Console]::ForegroundColor = $Foreground
+                [Console]::SetCursorPosition(0, $MenuTop + 3)
+                [Console]::Write(("Executing $($Actions[$Selected]) in $Remaining seconds...").PadRight($Width))
+                $PreviousSelection = $Selected
+                $PreviousRemaining = $Remaining
+            }
+            if ([Console]::KeyAvailable) {
+                $Key = [Console]::ReadKey($true)
+                # Both navigation and number keys change selection without pausing the timer.
+                switch ($Key.KeyChar) {
+                    '1' { $Selected = 0 }
+                    '2' { $Selected = 1 }
+                    '3' { $Selected = 2 }
+                }
+                switch ($Key.Key) {
+                    'UpArrow'    { $Selected = ($Selected + 2) % 3 }
+                    'LeftArrow'  { $Selected = ($Selected + 2) % 3 }
+                    'DownArrow'  { $Selected = ($Selected + 1) % 3 }
+                    'RightArrow' { $Selected = ($Selected + 1) % 3 }
+                    'Enter' { return $Actions[$Selected] }
+                }
+            }
+            if ($Timer.Elapsed.TotalSeconds -ge 5) { return $Actions[$Selected] }
+            Start-Sleep -Milliseconds 50
+        }
+    } finally {
+        # Restore console appearance before lifecycle messages or error prompts are printed.
+        [Console]::BackgroundColor = $Background
+        [Console]::ForegroundColor = $Foreground
+        [Console]::CursorVisible = $CursorVisible
+        [Console]::SetCursorPosition(0, [Math]::Min($MenuTop + 4, [Console]::BufferHeight - 1))
+        Write-Host "Selected action: $($Actions[$Selected])"
+    }
+}
 
 function Wait-Console([int]$Seconds) {
     # Redirected input must never block a scheduled or automated invocation.
@@ -278,6 +354,8 @@ function Start-Tunnel {
 }
 
 try {
+    # Select before acquiring the lifecycle lock so the menu never blocks other commands.
+    if ($ShowActionMenu) { $Action = Select-Action }
     if ($Action -notin @('start', 'stop', 'restart') -or $AppArguments -contains '--help') {
         throw 'Usage: startup.bat [start|stop|restart] [--config=PATH] [--key=value ...]'
     }

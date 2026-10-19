@@ -35,7 +35,16 @@ is not the runnable fat JAR. On Linux, set an appropriate output directory, for 
 ## Lifecycle scripts
 
 Use `startup.bat` on Windows or `startup.sh` on Linux. Both accept `start`, `stop`,
-and `restart`; the default action is `restart`, including double-clicking the BAT.
+and `restart`; the default action is `restart`. Double-clicking the BAT (or running
+it without arguments in an interactive console) opens a vertical menu: `1` restarts,
+`2` stops, and `3` starts. The selected row has a highlighted background. Arrow and
+number keys select an action without stopping or resetting the five-second countdown;
+Enter executes immediately. At timeout, the selected action runs (initially `restart`).
+Explicit actions and invocations with config
+arguments skip the menu; redirected input also defaults directly to `restart`.
+To customize the highlighted row, edit `$SelectionBackground` and
+`$SelectionForeground` in `Select-Action` in `startup.ps1` (defaults: `DarkCyan`
+background and `White` text).
 Copy the runnable JAR beside the scripts as `nio-tunnel.jar`, or customize its path.
 Keep `StartupConfig.java` with both launchers, and `startup.ps1` with the BAT.
 The configuration helper runs in Java source mode and calls the JAR's own config

@@ -18,7 +18,7 @@ hs_err_pid*
 *.log
 
 # Build / output directories
-/target/
+target/
 /build/
 /out/
 /dist/
@@ -107,5 +107,3 @@ libs/
 *.jks
 secrets.properties
 .env
-
-.github

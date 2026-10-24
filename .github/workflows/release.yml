@@ -1,0 +1,75 @@
+name: Release ZIP distributions
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check-master:
+    runs-on: ubuntu-latest
+    outputs:
+      eligible: ${{ steps.check.outputs.eligible }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check that the tagged commit belongs to master
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master
+          if git merge-base --is-ancestor "$(git rev-parse 'HEAD^{commit}')" refs/remotes/origin/master; then
+            echo 'eligible=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'eligible=false' >> "$GITHUB_OUTPUT"
+            echo 'Skipping release: the tagged commit is not in master history.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  release:
+    needs: check-master
+    if: needs.check-master.outputs.eligible == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: '**/pom.xml'
+      - name: Build and test both modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          for module in simple-tunnel nio-tunnel; do
+            mvn --batch-mode --no-transfer-progress -f "$module/pom.xml" clean verify \
+              "-Dbase.export.path=$RUNNER_TEMP/release-jars"
+          done
+      - name: Package complete ZIP distributions
+        run: python3 scripts/package_release.py --jar-dir "$RUNNER_TEMP/release-jars" --output-dir dist
+      - name: Publish ZIP files to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/simple-tunnel.zip dist/nio-tunnel.zip --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/simple-tunnel.zip dist/nio-tunnel.zip \
+              --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi

@@ -55,3 +55,37 @@ Module-specific:
 
 ## License
 See `LICENSE`.
+
+## Automated releases
+
+Push a tag beginning with `v` (for example `v1.0.0`) on a commit that is in
+`master` history. The GitHub Actions workflow checks this ancestry before
+building; tags pointing outside `master` skip the build and release job.
+Ordinary branch pushes and tags without the `v` prefix do not trigger it.
+
+```bash
+git switch master
+git pull --ff-only
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow builds and tests both modules with Java 21 and publishes only
+`simple-tunnel.zip` and `nio-tunnel.zip` as GitHub Release assets. Each ZIP
+contains a module directory with its runnable fat JAR, external
+`config.properties`, module `README.md`, this file as `PROJECT_README.md`,
+`LICENSE`, and all module launchers. The NIO
+distribution also includes the required `StartupConfig.java` helper. Runnable
+JARs are included inside the ZIPs and are not uploaded separately.
+
+Extract a ZIP, edit its `config.properties`, and run a launcher from the
+extracted directory. Java 21+ is required; the NIO launchers require a JDK.
+
+To reproduce the release packages locally (use an absolute path for the JAR
+output directory):
+
+```bash
+mvn -f simple-tunnel/pom.xml clean verify -Dbase.export.path=/absolute/path/release-jars
+mvn -f nio-tunnel/pom.xml clean verify -Dbase.export.path=/absolute/path/release-jars
+python scripts/package_release.py --jar-dir /absolute/path/release-jars --output-dir dist
+```

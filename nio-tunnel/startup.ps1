@@ -242,9 +242,42 @@ public static class TunnelProcess {
     return [Diagnostics.Process]::GetProcessById($ProcessId)
 }
 
-function Get-Listeners {
-    # Query all listeners so an empty result can be distinguished from a query failure.
-    @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+function Get-ListenerCandidates {
+    # Some Windows TCP providers report State=0 for working listeners. Query without
+    # a state filter; an unconnected local socket has no remote port. This also
+    # includes bound-only sockets, so readiness must additionally test TCP accept.
+    @(Get-NetTCPConnection -ErrorAction Stop | Where-Object { $_.RemotePort -eq 0 })
+}
+
+function Test-TcpListener([string]$Address, [int]$Port) {
+    $ProbeAddress = [Net.IPAddress]::Parse($Address)
+    if ($ProbeAddress.IsIPv4MappedToIPv6) { $ProbeAddress = $ProbeAddress.MapToIPv4() }
+    if ($ProbeAddress.Equals([Net.IPAddress]::Any)) { $ProbeAddress = [Net.IPAddress]::Loopback }
+    elseif ($ProbeAddress.Equals([Net.IPAddress]::IPv6Any)) { $ProbeAddress = [Net.IPAddress]::IPv6Loopback }
+    $Client = [Net.Sockets.TcpClient]::new($ProbeAddress.AddressFamily)
+    try {
+        $Connect = $Client.ConnectAsync($ProbeAddress, $Port)
+        return $Connect.Wait(500) -and $Client.Connected
+    } catch {
+        return $false
+    } finally {
+        $Client.Dispose()
+    }
+}
+
+function Test-ListenersReady([object[]]$Candidates, [int]$ProcessId, [int[]]$Ports, [string]$BindAddress) {
+    foreach ($Port in $Ports) {
+        $Owned = @($Candidates | Where-Object {
+            $_.OwningProcess -eq $ProcessId -and $_.LocalPort -eq $Port -and
+                (Test-ConflictingAddress $_.LocalAddress $BindAddress)
+        })
+        $Listening = $false
+        foreach ($Endpoint in $Owned) {
+            if (Test-TcpListener $Endpoint.LocalAddress $Port) { $Listening = $true; break }
+        }
+        if (!$Listening) { return $false }
+    }
+    return $true
 }
 
 function Test-ConflictingAddress([string]$Address, [string]$BindAddress) {
@@ -300,7 +333,7 @@ function Start-Tunnel {
         if ($Parts.Length -eq 2) { $Config[$Parts[0]] = $Parts[1] }
     }
     $Ports = @([int]$Config.HTTP_PORT, [int]$Config.SOCKS_PORT)
-    $Conflicts = @(Get-Listeners | Where-Object {
+    $Conflicts = @(Get-ListenerCandidates | Where-Object {
         $_.LocalPort -in $Ports -and (Test-ConflictingAddress $_.LocalAddress $Config.BIND_ADDRESS)
     })
     if ($Conflicts.Count -gt 0) {
@@ -332,11 +365,13 @@ function Start-Tunnel {
         while ($Timer.Elapsed.TotalSeconds -lt 20) {
             $Process.Refresh()
             if ($Process.HasExited) { throw "Java exited with code $($Process.ExitCode)." }
-            $Bound = @(Get-Listeners | Where-Object { $_.OwningProcess -eq $Process.Id -and $_.LocalPort -in $Ports })
-            if (@($Bound.LocalPort | Sort-Object -Unique).Count -eq 2) { $Ready = $true; break }
+            $Candidates = @(Get-ListenerCandidates)
+            if (Test-ListenersReady $Candidates $Process.Id $Ports $Config.BIND_ADDRESS) { $Ready = $true; break }
             Start-Sleep -Milliseconds 250
         }
-        if (!$Ready) { throw 'Startup timed out before both listener ports became ready.' }
+        if (!$Ready) {
+            throw "Startup timed out before both listener ports became ready. PID: $($Process.Id); expected ports: $($Ports -join ', ')."
+        }
     } catch {
         $Failure = $_
         $Process.Refresh()

@@ -86,6 +86,11 @@ chmod +x startup.sh
   appropriate privileges to see them.
 - Startup succeeds only when the new PID owns both listeners. The summary includes
   PID, ports, upstream, and log paths; it does not test upstream connectivity.
+  On Windows, readiness also requires a successful local TCP connection to each
+  listener. The port query uses unconnected local sockets rather than filtering
+  by `State=Listen`, because some Windows TCP providers return `State=0` for live
+  listeners. A socket that is only bound, without accepting connections, cannot
+  pass the readiness check.
   SLF4J runtime messages (startup, info, warnings, and logged exceptions) and stdout
   go to `logs/nio-tunnel.log`; raw stderr, including uncaught exceptions, goes to
   `logs/nio-tunnel-error.log`. Both are overwritten on each start. The access log
@@ -104,6 +109,9 @@ chmod +x startup.sh
 In the WSL environment used for validation, Netty with the installed JDK 25 needed
 `JAVA_TOOL_OPTIONS=-Djava.net.preferIPv4Stack=true` to bind IPv4 listeners. If the
 same `NioSocketError` occurs there, set this environment variable for IPv4 operation.
+
+Run the Windows readiness regression tests without starting Java:
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File nio-tunnel/src/test/powershell/StartupReadinessTest.ps1`.
 
 ## Configuration
 | Property | Description | Default |

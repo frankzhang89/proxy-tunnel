@@ -175,10 +175,11 @@ abstract class StreamingHttpForwardHandler extends ChannelInboundHandlerAdapter 
             client.pipeline().remove("http-proxy-handler");
         }
         upstream.pipeline().remove(this);
-        client.config().setAutoRead(true);
-        upstream.config().setAutoRead(true);
         // Preserve frames coalesced with the 101 response in this read cycle.
-        upstream.eventLoop().execute(() -> remove(upstream.pipeline(), HttpClientCodec.class));
+        upstream.eventLoop().execute(() -> {
+            remove(upstream.pipeline(), HttpClientCodec.class);
+            RelayHandler.activatePair(client, upstream);
+        });
     }
 
     private static void remove(ChannelPipeline pipeline, Class<? extends ChannelHandler> type) {

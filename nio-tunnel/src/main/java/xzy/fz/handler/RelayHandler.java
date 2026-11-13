@@ -5,11 +5,13 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.util.ReferenceCountUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * Bidirectional relay handler for tunneled connections.
@@ -26,18 +28,61 @@ import java.util.concurrent.atomic.AtomicLong;
  * // After tunnel is established:
  * clientChannel.pipeline().addLast(new RelayHandler(upstreamChannel));
  * upstreamChannel.pipeline().addLast(new RelayHandler(clientChannel));
+ * RelayHandler.activatePair(clientChannel, upstreamChannel);
  * </pre>
  *
  * <h2>Features:</h2>
  * <ul>
  *   <li>Zero-copy forwarding of ByteBuf data</li>
  *   <li>Automatic cleanup when either channel closes</li>
- *   <li>Backpressure handling via Netty's write futures</li>
+ *   <li>Bidirectional backpressure using write watermarks and automatic reads</li>
  *   <li>Bytes transferred tracking for access logging</li>
  * </ul>
  */
 public class RelayHandler extends ChannelInboundHandlerAdapter {
     private static final Logger log = LoggerFactory.getLogger(RelayHandler.class);
+    private static final WriteBufferWaterMark WATER_MARK =
+            new WriteBufferWaterMark(32 * 1024, 64 * 1024);
+
+    /** Call after both relays are installed and protocol cleanup is complete. */
+    public static void activatePair(Channel first, Channel second) {
+        onEventLoop(first, () -> {
+            first.config().setWriteBufferWaterMark(WATER_MARK);
+            syncRead(first, second);
+        });
+        onEventLoop(second, () -> {
+            second.config().setWriteBufferWaterMark(WATER_MARK);
+            syncRead(second, first);
+        });
+    }
+
+    private static void syncRead(Channel reader, Channel writer) {
+        onEventLoop(reader, () -> {
+            if (reader.isActive()) {
+                // Read live state here: a queued update must not revive stale reads.
+                reader.config().setAutoRead(writer.isActive() && writer.isWritable());
+            }
+        });
+    }
+
+    private static void onEventLoop(Channel channel, Runnable action) {
+        if (channel.eventLoop().inEventLoop()) {
+            action.run();
+        } else {
+            try {
+                channel.eventLoop().execute(action);
+            } catch (RejectedExecutionException shutdown) {
+                channel.close();
+            }
+        }
+    }
+
+    @Override
+    public void channelWritabilityChanged(ChannelHandlerContext ctx) {
+        // Congestion in this channel's output pauses input from the paired channel.
+        syncRead(relayChannel, ctx.channel());
+        ctx.fireChannelWritabilityChanged();
+    }
 
     /** The channel to relay bytes to */
     private final Channel relayChannel;
@@ -101,8 +146,10 @@ public class RelayHandler extends ChannelInboundHandlerAdapter {
                     // Write failed, close the connection
                     log.debug("Relay write failed, closing connection");
                     future.channel().close();
+                    ctx.close();
                 }
             });
+            syncRead(ctx.channel(), relayChannel);
         } else {
             // Paired channel is closed, release buffer to prevent memory leak
             ReferenceCountUtil.release(msg);

@@ -112,6 +112,15 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
      * If the target matches a no-proxy pattern, connects directly; otherwise via upstream.
      */
     private void handleSocks4Command(ChannelHandlerContext ctx, Socks4CommandRequest request) {
+        // SOCKS4/4a USERID cannot satisfy the required username/password authentication.
+        if (config.requireClientAuth()) {
+            log.info("Rejecting SOCKS4/4a from {}: local authentication requires SOCKS5",
+                    ctx.channel().remoteAddress());
+            ctx.writeAndFlush(new DefaultSocks4CommandResponse(Socks4CommandStatus.REJECTED_OR_FAILED))
+                    .addListener(ChannelFutureListener.CLOSE);
+            return;
+        }
+
         // Only CONNECT command is supported
         if (request.type() != Socks4CommandType.CONNECT) {
             log.warn("Unsupported SOCKS4 command: {}", request.type());

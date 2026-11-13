@@ -149,6 +149,7 @@ public class Socks5ConnectHandler extends SimpleChannelInboundHandler<FullHttpRe
         
         clientChannel.pipeline().addLast("relay", clientRelay);
         upstreamChannel.pipeline().addLast("relay", upstreamRelay);
+        RelayHandler.activatePair(clientChannel, upstreamChannel);
         
         // Log access when connection closes
         clientChannel.closeFuture().addListener(f -> {

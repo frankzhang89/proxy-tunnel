@@ -7,7 +7,7 @@ A high-performance NIO-based HTTP and SOCKS5 proxy using Netty that forwards tra
 - **HTTP Proxy** - Supports CONNECT (HTTPS tunneling) and regular HTTP forwarding
 - **Streaming HTTP** - Streams request and response bodies, including large uploads/downloads, chunked trailers, `100 Continue`, and SSE; response bodies are not limited by `http.maxInitialBytes`
 - **WebSocket Proxy** - Supports `ws://` HTTP Upgrade and `wss://` tunneling
-- **SOCKS5 Proxy** - Full SOCKS5 protocol support with optional authentication
+- **SOCKS Proxy** - SOCKS5 TCP CONNECT with optional username/password authentication; SOCKS4/4a CONNECT when local authentication is disabled
 - **PAC File** - Auto-generates or serves custom Proxy Auto-Config files
 - **TLS** - Secure communication with upstream HTTPS proxy
 - **No Proxy** - Bypass the upstream proxy and connect directly to specified hosts
@@ -172,6 +172,13 @@ export https_proxy=http://127.0.0.1:8383
 ```
 
 ### SOCKS5 Proxy
+When `listen.username` is set, local authentication is required: SOCKS4/4a requests
+are rejected before any direct or upstream connection is opened. Use a SOCKS5
+client with the configured username and password. SOCKS4 USERID is not treated
+as an authentication credential. Without local authentication, SOCKS4/4a remain
+available on the same listener. Only TCP CONNECT is supported; BIND and UDP
+ASSOCIATE are not supported.
+
 Configure your application to use SOCKS5 proxy at `127.0.0.1:1080`:
 ```bash
 # For curl

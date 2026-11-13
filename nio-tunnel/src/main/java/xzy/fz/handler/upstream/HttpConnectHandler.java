@@ -156,6 +156,7 @@ public class HttpConnectHandler extends SimpleChannelInboundHandler<FullHttpResp
         // Add relay handlers for bidirectional byte forwarding
         clientChannel.pipeline().addLast("relay", clientRelay);
         upstreamChannel.pipeline().addLast("relay", upstreamRelay);
+        RelayHandler.activatePair(clientChannel, upstreamChannel);
         
         // Log access when either channel closes
         clientChannel.closeFuture().addListener(f -> {

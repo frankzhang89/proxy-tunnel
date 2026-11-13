@@ -103,6 +103,7 @@ public class DirectTunnelHandler extends ChannelInboundHandlerAdapter {
 
         clientChannel.pipeline().addLast("relay", clientRelay);
         targetChannel.pipeline().addLast("relay", targetRelay);
+        RelayHandler.activatePair(clientChannel, targetChannel);
 
         clientChannel.closeFuture().addListener(f -> {
             totalBytes.addAndGet(clientRelay.getBytesTransferred());

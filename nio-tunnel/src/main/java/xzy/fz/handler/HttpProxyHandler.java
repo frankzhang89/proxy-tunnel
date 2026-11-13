@@ -185,8 +185,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void handlerRemoved(ChannelHandlerContext ctx) {
         releasePending();
-        // Upgrade removes this handler and transfers ownership to RelayHandler.
-        ctx.channel().config().setAutoRead(true);
+        // RelayHandler.activatePair takes ownership of reads after protocol cleanup.
     }
 
     private void releasePending() {

@@ -56,6 +56,7 @@ class RelayBackpressureIntegrationTest {
         byte[] payload = new byte[4 * 1024 * 1024 + 37];
         for (int i = 0; i < payload.length; i++) payload[i] = (byte) (i * 31);
         CountDownLatch consume = new CountDownLatch(1);
+        byte[] greeting = {0, (byte) 0xff, 'S', 'S', 'H', '-', '2', '.', '0', '\r', '\n'};
         EventLoopGroup group = new NioEventLoopGroup(1);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         Channel proxy = null;
@@ -136,7 +137,13 @@ class RelayBackpressureIntegrationTest {
                                 ? "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
                                     + "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
                                 : "HTTP/1.1 200 Connection Established\r\n\r\n";
-                        socket.getOutputStream().write(response.getBytes(StandardCharsets.US_ASCII));
+                        ByteArrayOutputStream firstWrite = new ByteArrayOutputStream();
+                        firstWrite.write(response.getBytes(StandardCharsets.US_ASCII));
+                        firstWrite.write(greeting);
+                        socket.getOutputStream().write(firstWrite.toByteArray());
+                        socket.getOutputStream().flush();
+                    } else {
+                        socket.getOutputStream().write(greeting);
                         socket.getOutputStream().flush();
                     }
                     assertTrue(consume.await(10, TimeUnit.SECONDS));
@@ -152,6 +159,7 @@ class RelayBackpressureIntegrationTest {
             client = new Socket("127.0.0.1", ((InetSocketAddress) proxy.localAddress()).getPort());
             client.setSoTimeout(15000);
             handshake(client, route.protocol(), port);
+            assertArrayEquals(greeting, client.getInputStream().readNBytes(greeting.length));
             Channel front = frontend.get();
             // Serialize after the deferred WebSocket codec removal and relay activation.
             front.eventLoop().submit(() -> {

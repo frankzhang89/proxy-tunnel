@@ -4,6 +4,8 @@ Multi-module Java proxies that forward local HTTP(S) traffic through an upstream
 - [`simple-tunnel`](simple-tunnel/README.md): lightweight HTTP proxy using Java 21 virtual threads.
 - [`nio-tunnel`](nio-tunnel/README.md): high-performance Netty-based HTTP & SOCKS5 proxy with PAC support.
 
+See the [Release Notes](RELEASE_NOTES.md) for version history and fixes.
+
 ## Requirements
 - JDK 21+
 - Maven 3.8+
@@ -74,7 +76,7 @@ The workflow builds and tests both modules with Java 21 and publishes only
 `simple-tunnel.zip` and `nio-tunnel.zip` as GitHub Release assets. Each ZIP
 contains a module directory with its runnable fat JAR, external
 `config.properties`, module `README.md`, this file as `PROJECT_README.md`,
-`LICENSE`, and all module launchers. The NIO
+`RELEASE_NOTES.md`, `LICENSE`, and all module launchers. The NIO
 distribution also includes the required `StartupConfig.java` helper. Runnable
 JARs are included inside the ZIPs and are not uploaded separately.
 

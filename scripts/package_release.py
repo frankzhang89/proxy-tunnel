@@ -27,6 +27,7 @@ def package(module, main_class, companions, jar_dir, output_dir):
         "config.properties": ROOT / module / "src/main/resources/config.properties",
         "README.md": ROOT / module / "README.md",
         "PROJECT_README.md": ROOT / "README.md",
+        "RELEASE_NOTES.md": ROOT / "RELEASE_NOTES.md",
         "LICENSE": ROOT / "LICENSE",
         **{name: ROOT / module / name for name in companions},
     }

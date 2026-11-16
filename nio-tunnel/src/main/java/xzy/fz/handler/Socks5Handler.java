@@ -1,5 +1,7 @@
 package xzy.fz.handler;
 
+import xzy.fz.monitor.Monitor;
+
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
 import io.netty.channel.socket.SocketChannel;
@@ -152,6 +154,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
      */
     private void connectSocks4Direct(ChannelHandlerContext ctx, String targetHost, int targetPort,
                                       long startTime, String clientAddress) {
+        var flow = Monitor.begin(ctx, targetHost, targetPort, "socks4", true, config);
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
                 .channel(NioSocketChannel.class)
@@ -160,6 +163,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        Monitor.attach(ch, flow);
                         ch.pipeline().addLast(new DirectTunnelHandler(
                                 ctx,
                                 () -> ctx.writeAndFlush(
@@ -180,6 +184,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
 
         bootstrap.connect(targetHost, targetPort).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
+                        Monitor.failed(future.channel(), future.cause());
                 log.error("SOCKS4 direct connect to {}:{} failed: {}", targetHost, targetPort,
                         future.cause().getMessage());
                 ctx.writeAndFlush(new DefaultSocks4CommandResponse(Socks4CommandStatus.REJECTED_OR_FAILED))
@@ -193,6 +198,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
      */
     private void connectSocks4ViaUpstream(ChannelHandlerContext ctx, String targetHost, int targetPort,
                                            long startTime, String clientAddress) {
+        var flow = Monitor.begin(ctx, targetHost, targetPort, "socks4", false, config);
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
                 .channel(NioSocketChannel.class)
@@ -201,6 +207,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        Monitor.attach(ch, flow);
                         ChannelPipeline p = ch.pipeline();
                         // Add SSL handler if upstream requires TLS
                         if (sslContext != null) {
@@ -219,6 +226,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
         bootstrap.connect(config.upstreamHost(), config.upstreamPort())
                 .addListener((ChannelFutureListener) future -> {
                     if (!future.isSuccess()) {
+                        Monitor.failed(future.channel(), future.cause());
                         log.error("Failed to connect to upstream for SOCKS4: {}",
                                 future.cause().getMessage());
                         ctx.writeAndFlush(new DefaultSocks4CommandResponse(
@@ -320,6 +328,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
     private void connectSocks5Direct(ChannelHandlerContext ctx, Socks5CommandRequest request,
                                       String targetHost, int targetPort,
                                       long startTime, String clientAddress) {
+        var flow = Monitor.begin(ctx, targetHost, targetPort, "socks5", true, config);
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
                 .channel(NioSocketChannel.class)
@@ -328,6 +337,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        Monitor.attach(ch, flow);
                         ch.pipeline().addLast(new DirectTunnelHandler(
                                 ctx,
                                 () -> {
@@ -356,6 +366,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
 
         bootstrap.connect(targetHost, targetPort).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
+                        Monitor.failed(future.channel(), future.cause());
                 log.error("SOCKS5 direct connect to {}:{} failed: {}", targetHost, targetPort,
                         future.cause().getMessage());
                 ctx.writeAndFlush(new DefaultSocks5CommandResponse(
@@ -371,6 +382,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
     private void connectSocks5ViaUpstream(ChannelHandlerContext ctx, String targetHost, int targetPort,
                                            long startTime, String clientAddress) {
         // Connect to upstream proxy via HTTP CONNECT
+        var flow = Monitor.begin(ctx, targetHost, targetPort, "socks5", false, config);
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
                 .channel(NioSocketChannel.class)
@@ -379,6 +391,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        Monitor.attach(ch, flow);
                         ChannelPipeline p = ch.pipeline();
                         // Add SSL handler if upstream requires TLS
                         if (sslContext != null) {
@@ -397,6 +410,7 @@ public class Socks5Handler extends ChannelInboundHandlerAdapter {
         bootstrap.connect(config.upstreamHost(), config.upstreamPort())
                 .addListener((ChannelFutureListener) future -> {
                     if (!future.isSuccess()) {
+                        Monitor.failed(future.channel(), future.cause());
                         log.error("Failed to connect to upstream for SOCKS5: {}",
                                 future.cause().getMessage());
                         ctx.writeAndFlush(new DefaultSocks5CommandResponse(

@@ -92,6 +92,12 @@ public record Cli(Map<String, String> options) {
             to an upstream HTTPS proxy. It's designed for environments where direct
             HTTPS proxy configuration is not supported (e.g., JetBrains IDEs).
             
+            Web monitor: http://127.0.0.1:8390 (loopback only)
+              --ui.enabled=BOOL           Enable monitor (default: true)
+              --ui.port=PORT              Web port (default: 8390)
+              --ui.process.lookup.enabled=BOOL  Identify local socket owners
+              --ui.process.name.cache.seconds=N Name cache TTL (default: 300; 0 disables)
+
             Options:
               --config=PATH               Path to external config properties file
               --listen.host=HOST          Listen address (default: 127.0.0.1)

@@ -383,6 +383,7 @@ function Start-Tunnel {
     Write-Host "HTTP: $($Config.LISTEN_HOST):$($Config.HTTP_PORT)"
     Write-Host "SOCKS: $($Config.LISTEN_HOST):$($Config.SOCKS_PORT)"
     Write-Host "Upstream: $($Config.UPSTREAM_HOST):$($Config.UPSTREAM_PORT)"
+    if ($Config.UI_ENABLED -eq 'true') { Write-Host "Web monitor (configured): $($Config.UI_URL) - see runtime log for bind status." }
     Write-Host "Runtime log: $OutLog"
     Write-Host "Error log: $ErrorLog"
     Write-Host "Access log: $($Config.ACCESS_LOG)"

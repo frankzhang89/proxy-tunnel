@@ -4,6 +4,7 @@ import io.netty.channel.*;
 import io.netty.handler.codec.http.*;
 import io.netty.util.ReferenceCountUtil;
 import xzy.fz.handler.HttpProxyHandler;
+import xzy.fz.monitor.Monitor;
 import xzy.fz.handler.RelayHandler;
 import xzy.fz.log.AccessLog;
 
@@ -43,6 +44,7 @@ abstract class StreamingHttpForwardHandler extends ChannelInboundHandlerAdapter 
         // HttpProxyHandler supplies content after these headers, including LastHttpContent.
         ctx.writeAndFlush(forwardRequest()).addListener(future -> {
             if (!future.isSuccess()) exceptionCaught(ctx, future.cause());
+            else Monitor.active(ctx.channel());
         });
         HttpProxyHandler client = clientHandler();
         if (client != null) client.forwardReady(clientCtx, ctx.channel());
@@ -138,13 +140,13 @@ abstract class StreamingHttpForwardHandler extends ChannelInboundHandlerAdapter 
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        if (!complete) failClient();
+        if (!complete) { Monitor.failed(ctx.channel(), "HTTP response incomplete"); failClient(); }
         ctx.fireChannelInactive();
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        if (!complete) failClient();
+        if (!complete) { Monitor.failed(ctx.channel(), "HTTP response incomplete"); failClient(); }
         ctx.close();
     }
 
@@ -164,6 +166,7 @@ abstract class StreamingHttpForwardHandler extends ChannelInboundHandlerAdapter 
     }
 
     private void switchToRelayMode(ChannelHandlerContext ctx) {
+        Monitor.protocol(ctx.channel(), "websocket");
         Channel client = clientCtx.channel();
         Channel upstream = ctx.channel();
         // Decoders may release buffered bytes when removed: install relays first.

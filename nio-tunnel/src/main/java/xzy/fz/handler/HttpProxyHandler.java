@@ -1,5 +1,7 @@
 package xzy.fz.handler;
 
+import xzy.fz.monitor.Monitor;
+
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -324,6 +326,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
      */
     private void handleConnectDirect(ChannelHandlerContext ctx, String targetHost, int targetPort,
                                       long startTime, String clientAddress) {
+        var flow = Monitor.begin(ctx, targetHost, targetPort, "http_connect", true, config);
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
                 .channel(NioSocketChannel.class)
@@ -332,6 +335,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        Monitor.attach(ch, flow);
                         ch.pipeline().addLast(new DirectTunnelHandler(
                                 ctx,
                                 () -> {
@@ -358,6 +362,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
 
         bootstrap.connect(targetHost, targetPort).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
+                if (flow != null) Monitor.failed(future.channel(), future.cause());
                 log.error("Direct CONNECT to {} failed: {}", targetHost + ":" + targetPort,
                         future.cause().getMessage());
                 sendError(ctx, HttpResponseStatus.BAD_GATEWAY,
@@ -372,6 +377,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
     private void handleConnectViaUpstream(ChannelHandlerContext ctx, String targetHost, int targetPort,
                                            long startTime, String clientAddress) {
         // Create bootstrap for upstream connection
+        var flow = Monitor.begin(ctx, targetHost, targetPort, "http_connect", false, config);
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())  // Use same event loop as client
                 .channel(NioSocketChannel.class)
@@ -380,6 +386,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        Monitor.attach(ch, flow);
                         ChannelPipeline p = ch.pipeline();
                         // Add SSL handler if upstream requires TLS
                         if (sslContext != null) {
@@ -400,6 +407,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
         ChannelFuture connectFuture = bootstrap.connect(config.upstreamHost(), config.upstreamPort());
         connectFuture.addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
+                if (flow != null) Monitor.failed(future.channel(), future.cause());
                 log.error("Failed to connect to upstream proxy: {}", future.cause().getMessage());
                 sendError(ctx, HttpResponseStatus.BAD_GATEWAY, "Failed to connect to upstream proxy");
             }
@@ -452,6 +460,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
             return;
         }
 
+        var flow = Monitor.begin(ctx, host, port, "http", true, config);
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
                 .channel(NioSocketChannel.class)
@@ -460,6 +469,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        Monitor.attach(ch, flow);
                         ChannelPipeline p = ch.pipeline();
                         p.addLast(new HttpClientCodec());
                         p.addLast(new DirectHttpForwardHandler(ctx, request, relativeUri,
@@ -473,6 +483,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
         forwardChannel = connect.channel();
         connect.addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
+                if (flow != null) Monitor.failed(future.channel(), future.cause());
                 log.error("Direct HTTP forward to {}:{} failed: {}", finalHost, finalPort,
                         future.cause().getMessage());
                 sendError(ctx, HttpResponseStatus.BAD_GATEWAY,
@@ -487,6 +498,10 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
     private void handleHttpForwardViaUpstream(ChannelHandlerContext ctx, HttpRequest request,
                                                long startTime, String clientAddress) {
         // Create bootstrap for upstream connection
+        URI targetUri;
+        try { targetUri = new URI(request.uri()); if (targetUri.getHost() == null) throw new IllegalArgumentException(); }
+        catch (Exception e) { sendError(ctx, HttpResponseStatus.BAD_REQUEST, "Invalid request URI"); return; }
+        var flow = Monitor.begin(ctx, targetUri.getHost(), targetUri.getPort() < 0 ? 80 : targetUri.getPort(), "http", false, config);
         Bootstrap bootstrap = new Bootstrap();
         bootstrap.group(ctx.channel().eventLoop())
                 .channel(NioSocketChannel.class)
@@ -495,6 +510,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
                 .handler(new ChannelInitializer<SocketChannel>() {
                     @Override
                     protected void initChannel(SocketChannel ch) {
+                        Monitor.attach(ch, flow);
                         ChannelPipeline p = ch.pipeline();
                         if (sslContext != null) {
                             p.addLast(sslContext.newHandler(ch.alloc(),
@@ -512,6 +528,7 @@ public class HttpProxyHandler extends ChannelInboundHandlerAdapter {
         forwardChannel = connect.channel();
         connect.addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
+                if (flow != null) Monitor.failed(future.channel(), future.cause());
                 log.error("Failed to connect to upstream: {}", future.cause().getMessage());
                 sendError(ctx, HttpResponseStatus.BAD_GATEWAY, "Failed to connect to upstream proxy");
             }

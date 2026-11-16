@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>nio-tunnel Connection Monitor</title>
+    <link rel="stylesheet" href="/app.css">
+    <script src="/app.js" defer></script>
+</head>
+<body>
+<header><b class="logo">N</b><strong>nio-tunnel</strong><span>Connection Monitor</span><span id="refresh"
+                                                                                             class="refresh">Connecting…</span><small
+        id="address"></small></header>
+<main>
+    <section class="heading">
+        <div><h1>Connections &amp; Traffic</h1>
+            <p>Best-effort local process lookup · Remote source addresses · Recent transfer history</p></div>
+        <div class="endpoints"><p id="ports"></p>
+            <p id="upstream"></p></div>
+    </section>
+    <section class="cards">
+        <article><label>Active clients / transfers</label>
+            <h2 id="active">—</h2><small id="routes"></small></article>
+        <article><label>↑ Total upload speed</label>
+            <h2 id="upload" class="up">—</h2></article>
+        <article><label>↓ Total download speed</label>
+            <h2 id="download" class="down">—</h2></article>
+        <article><label>Transferred this session</label>
+            <h3 id="total">—</h3><small>Includes upstream and direct traffic</small></article>
+    </section>
+    <section class="panel">
+        <nav>
+            <div id="tabs">
+                <button data-scope="active" class="selected">Active</button>
+                <button data-scope="recent">Recent</button>
+                <button data-scope="all">All</button>
+            </div>
+            <input id="search" aria-label="Search connections" placeholder="Process, PID, source IP or target…"><select
+                id="route" aria-label="Route">
+            <option value="all">All routes</option>
+            <option>upstream</option>
+            <option>direct</option>
+        </select><select id="protocol" aria-label="Protocol">
+            <option value="all">All protocols</option>
+            <option value="http">HTTP</option>
+            <option value="http_connect">HTTP CONNECT</option>
+            <option value="socks4">SOCKS4/4a</option>
+            <option value="socks5">SOCKS5</option>
+            <option value="websocket">WebSocket</option>
+        </select><label class="unit-control" for="units">Units <select id="units">
+            <option value="Auto">Auto</option>
+            <option>B</option>
+            <option>KiB</option>
+            <option>MiB</option>
+            <option>GiB</option>
+        </select></label>
+            <button id="pause">Ⅱ Pause refresh</button>
+        </nav>
+        <div class="table-wrap">
+            <table id="connections">
+                <colgroup id="columns"></colgroup>
+                <thead>
+                <tr id="column-headings"></tr>
+                </thead>
+                <tbody id="rows"></tbody>
+            </table>
+            <p id="empty" hidden>No matching connections</p></div>
+        <footer><span id="count"></span>
+            <div class="pagination"><label for="page-size">Rows per page <select id="page-size">
+                <option>25</option>
+                <option selected>50</option>
+                <option>100</option>
+                <option>200</option>
+            </select></label>
+                <button id="prev">Previous</button>
+                <span id="page"></span>
+                <button id="next">Next</button>
+            </div>
+        </footer>
+    </section>
+    <section id="detail" class="panel detail" hidden></section>
+    <p class="note">↑ Upload: tunnel → upstream / direct target　 ↓ Download: upstream / direct target → tunnel</p>
+    <p class="note">Successful writes and received bytes, including TLS, HTTP and proxy handshakes; excluding TCP/IP,
+        retransmissions and monitor traffic.</p>
+    <p class="note" id="process"></p>
+</main>
+</body>
+</html>

@@ -222,3 +222,111 @@ Configure browsers or system proxy settings to use this PAC URL for automatic pr
 | SOCKS5 Proxy | ✗ | ✓ |
 | PAC File | ✗ | ✓ |
 | Default HTTP Port | 8282 | 8383 |
+
+## Local Web monitor
+
+Open `http://127.0.0.1:8390` after startup. The read-only page is bundled in the
+runnable JAR and needs no external assets. It shows source IP/port, best-effort
+local PID/name, protocol, requested destination host/IP and port, actual
+`upstream`/`direct` route, upstream endpoint, status, upload/download speed and
+cumulative bytes. Click a row for details. Remote clients show source IP/port.
+Process names identify the socket owner (which may be a browser subprocess or
+`java`), not necessarily a product name. Destination domains are not inferred
+from IP addresses or resolved on behalf of the upstream.
+
+| Property | Default | Purpose |
+| --- | --- | --- |
+| `ui.enabled` | `true` | Enable monitoring; false disables sampling and process lookup too |
+| `ui.host` | `127.0.0.1` | Loopback addresses only |
+| `ui.port` | `8390` | Separate Web listener |
+| `ui.history.seconds` | `300` | Retain ended/failed transfers in memory |
+| `ui.history.max.entries` | `1000` | Maximum ended/failed records |
+| `ui.process.lookup.enabled` | `true` | Best-effort local process lookup |
+| `ui.process.name.cache.seconds` | `300` | Successful PID/name cache lifetime; 0 disables the cache |
+
+These settings follow the existing file/CLI precedence, e.g.
+`--ui.port=8391` or `--ui.enabled=false`. If the UI cannot bind, the proxy keeps
+running; the runtime log records whether the configured UI address is available.
+
+Statistics are sampled once per second, with normally up to two seconds of page
+latency. Upload means tunnel to upstream/direct target; download is the reverse.
+Counters observe successful Netty writes and received bytes near the outbound
+socket, including TLS/HTTP/proxy handshakes, excluding TCP/IP headers, retransmits,
+and the monitor's own traffic. Partially failed writes are not estimated. These
+are connection I/O counters, not NIC counters. Totals include short-lived and
+ended transfers, survive history eviction, and reset on restart. A client TCP
+connection can produce multiple HTTP transfer rows; WebSocket upgrades retain
+one row. Activity counts include connecting transfers. Filtering never changes
+global totals. Pause affects page refresh only. Closed rows show zero speed.
+
+Windows uses JNA IP Helper tables; Linux uses `ss` (iproute2). Missing tools,
+permissions, namespaces/NAT, very short connections, or native loading failures
+can make attribution unavailable. Lookup is shared between pages, bounded and
+runs outside proxy I/O threads. No credentials, payloads, full URLs or command
+lines are exposed by the monitor. Newer JDKs may require
+`--enable-native-access=ALL-UNNAMED` to allow JNA without native-access warnings.
+
+The JSON interface is `GET /api/snapshot`, with `scope=active|recent|all`, literal
+`q` search, `route=all|upstream|direct`,
+`protocol=all|http|http_connect|socks4|socks5|websocket`, `page` and `pageSize`
+(default 50, maximum 200). Speeds use B/s and cumulative sizes use bytes.
+
+### Process name caching and display units
+
+Process names are shared across connections using a bounded Guava cache (4096
+successful entries). Entries expire 300 seconds after writing by default; hits
+do not extend this deadline. The next lookup reloads an expired entry. Set
+`--ui.process.name.cache.seconds=60` to change the lifetime, or `0` to disable
+name caching. Negative values are configuration errors. Missing names and lookup
+failures are not cached. Process identity is checked on every cache hit to avoid
+reusing another process's name after PID reuse. Socket-to-PID matching still uses
+fresh connection tables; existing connection records retain their resolved name.
+
+The English UI displays the configured upstream once in the upper-right corner,
+next to the listener ports, including when there are no connections or only
+direct transfers. `direct`/`upstream` route labels remain in the table. Snapshot
+JSON adds a top-level `upstream` object (`host`, `port`), retaining the per-record
+fields for compatibility.
+
+The single **Units** selector applies to all speeds and byte totals, including
+row details. **Auto** uses powers of 1024 up to GiB; B, KiB, MiB and GiB force a
+fixed unit (with `/s` appended for speeds). Bytes are integers; larger units use
+two decimal places. The browser remembers the selection when local storage is
+available. Unit changes work while refresh is paused and never affect raw JSON
+counters or server-side sampling. Times use English formatting in the browser's
+local timezone. Process names and addresses are displayed as supplied.
+
+### Connection table controls
+
+The table separates **Process Name** and **PID**. Click any column heading to
+sort all matching transfers before pagination; click it again to reverse order.
+Text/address/PID columns initially sort ascending, speeds descending. Missing
+values stay last. Source addresses sort numerically by IP only, ignoring source
+ports; speed sorting always uses raw B/s regardless of display units. Equal keys
+use numeric connection IDs for stable ordering. Before a heading is selected,
+the existing time-descending order applies.
+
+Drag the right edge of any heading to resize that column (minimum 48px).
+Widths survive automatic updates, sorting, filtering and pagination, but reset
+on browser reload. Narrow cells and headings truncate with an ellipsis; hover
+for full text, or click a row to view details. The compact list uses a light
+Task Manager-inspired style while retaining the overview cards.
+
+**Rows per page** offers 25, 50 (default), 100 and 200. Changing it resets to page
+one while preserving filters, ordering, units and column widths. This preference
+is not stored across page reloads. Sorting and page-size changes still perform a
+single request while automatic refresh is paused. Failed requests retain the
+last successful data and restore the last confirmed controls. Superseded replies
+cannot overwrite newer selections.
+
+Snapshot requests optionally accept `sort=processName|pid|sourceIp|protocol|target|route|uploadBps|downloadBps|status`
+and `order=asc|desc`. Invalid values return 400. Omit `sort` for default time
+ordering. Existing `page` and `pageSize` parameters continue to work; size is
+capped at 200 and summaries remain global.
+
+Backend ordering/pagination tests are part of `mvn test`. The browser fixture
+suite is `node nio-tunnel/src/test/web/connection-table.cjs` from the repository
+root, with Playwright available through `NODE_PATH` or `PLAYWRIGHT_MODULE`.
+Optionally set `CHROME_EXECUTABLE` to an installed Chrome executable; otherwise
+Playwright uses its installed Chromium. This verifies interactions with fixture
+responses; Java tests verify the real snapshot ordering.

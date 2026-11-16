@@ -5,6 +5,7 @@ import io.netty.handler.codec.http.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xzy.fz.config.Config;
+import xzy.fz.monitor.Monitor;
 import xzy.fz.handler.HttpProxyHandler;
 import xzy.fz.handler.RelayHandler;
 import xzy.fz.log.AccessLog;
@@ -61,6 +62,7 @@ abstract class AbstractUpstreamConnectHandler extends SimpleChannelInboundHandle
         if (!clientCtx.channel().isActive()) { ctx.close(); return; }
         Object success = successResponse(ctx.channel());
         established = true;
+        Monitor.active(ctx.channel());
         // Encode and queue the protocol response before any raw bytes, without blocking.
         clientCtx.writeAndFlush(success).addListener(future -> {
             if (!future.isSuccess()) { logOnce(502, 0); closeBoth(ctx); }
@@ -94,6 +96,7 @@ abstract class AbstractUpstreamConnectHandler extends SimpleChannelInboundHandle
     private void fail(ChannelHandlerContext ctx, HttpResponseStatus status) {
         if (failed) { ctx.close(); return; }
         failed = true;
+        Monitor.failed(ctx.channel(), "Upstream CONNECT " + status.code());
         logOnce(status.code(), 0);
         if (clientCtx.channel().isActive())
             clientCtx.writeAndFlush(failureResponse(status)).addListener(ChannelFutureListener.CLOSE);

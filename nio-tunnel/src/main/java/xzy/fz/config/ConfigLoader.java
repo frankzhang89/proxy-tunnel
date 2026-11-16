@@ -112,7 +112,12 @@ public final class ConfigLoader {
                 pacEnabled, pacPath, pacHost, pacFile,
                 serverName, logFile,
                 accessLogFile, accessLogConsole, accessLogEnabled,
-                noProxyMatcher
+                noProxyMatcher,
+                new UiConfig(Boolean.parseBoolean(props.getProperty("ui.enabled", "true")),
+                        props.getProperty("ui.host", "127.0.0.1"), parseInt(props, "ui.port", 8390),
+                        parseInt(props, "ui.history.seconds", 300), parseInt(props, "ui.history.max.entries", 1000),
+                        Boolean.parseBoolean(props.getProperty("ui.process.lookup.enabled", "true")),
+                        parseInt(props, "ui.process.name.cache.seconds", 300))
         );
     }
 

@@ -19,6 +19,8 @@ import xzy.fz.config.ConfigLoader;
 import xzy.fz.handler.HttpProxyHandler;
 import xzy.fz.handler.Socks5Handler;
 import xzy.fz.log.AccessLog;
+import xzy.fz.monitor.Monitor;
+import xzy.fz.monitor.MonitorServer;
 
 import javax.net.ssl.SSLException;
 import java.util.concurrent.TimeUnit;
@@ -123,6 +125,8 @@ public final class NIOProxyTunnel {
      */
     private static final class TunnelServer {
         private final Config config;
+        private Monitor monitor;
+        private MonitorServer monitorServer;
 
         /** Boss group handles incoming connections (single thread is sufficient) */
         private final EventLoopGroup bossGroup;
@@ -169,6 +173,16 @@ public final class NIOProxyTunnel {
          */
         void start() {
             try {
+                if (config.ui().enabled()) {
+                    monitorServer = new MonitorServer(config);
+                    try {
+                        monitor = monitorServer.start();
+                        log.info("Web monitor available at http://{}:{}", config.ui().host(), config.ui().port());
+                    } catch (Exception | LinkageError e) {
+                        log.warn("Web monitor disabled; proxy remains available: {}", e.toString());
+                        monitorServer.close(); monitorServer = null;
+                    }
+                }
                 // Start HTTP proxy server
                 startHttpProxy();
                 // Start SOCKS5 proxy server
@@ -212,6 +226,13 @@ public final class NIOProxyTunnel {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
+                            if (monitor != null) {
+                                ch.pipeline().addLast("monitor-client", new ChannelInboundHandlerAdapter() {
+                                    @Override public void channelActive(ChannelHandlerContext ctx) {
+                                        monitor.accept(ctx.channel()); ctx.fireChannelActive();
+                                    }
+                                });
+                            }
                             ChannelPipeline p = ch.pipeline();
 
                             // Idle state handler - closes connections after 120s of inactivity
@@ -251,6 +272,13 @@ public final class NIOProxyTunnel {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
+                            if (monitor != null) {
+                                ch.pipeline().addLast("monitor-client", new ChannelInboundHandlerAdapter() {
+                                    @Override public void channelActive(ChannelHandlerContext ctx) {
+                                        monitor.accept(ctx.channel()); ctx.fireChannelActive();
+                                    }
+                                });
+                            }
                             ChannelPipeline p = ch.pipeline();
 
                             // Idle state handler
@@ -275,6 +303,8 @@ public final class NIOProxyTunnel {
          */
         void shutdown() {
             log.info("Shutting down nio-tunnel...");
+
+            if (monitorServer != null) monitorServer.close();
 
             // Close access log
             if (accessLog != null) {

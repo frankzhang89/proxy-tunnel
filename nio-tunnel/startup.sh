@@ -137,6 +137,7 @@ start_tunnel() {
             LISTEN_HOST) LISTEN_HOST=$value ;; BIND_ADDRESS) BIND_ADDRESS=$value ;;
             HTTP_PORT) HTTP_PORT=$value ;; SOCKS_PORT) SOCKS_PORT=$value ;;
             UPSTREAM_HOST) UPSTREAM_HOST=$value ;; UPSTREAM_PORT) UPSTREAM_PORT=$value ;;
+            UI_ENABLED) UI_ENABLED=$value ;; UI_URL) UI_URL=$value ;;
             ACCESS_LOG) ACCESS_LOG=$value ;;
         esac
     done <<< "$config"
@@ -206,6 +207,7 @@ start_tunnel() {
     fi
     printf 'nio-tunnel started. PID: %s\nHTTP: %s:%s\nSOCKS: %s:%s\nUpstream: %s:%s\n' \
         "$child" "$LISTEN_HOST" "$HTTP_PORT" "$LISTEN_HOST" "$SOCKS_PORT" "$UPSTREAM_HOST" "$UPSTREAM_PORT"
+    if [[ ${UI_ENABLED:-false} == true ]]; then printf 'Web monitor (configured): %s - see runtime log for bind status.\n' "$UI_URL"; fi
     printf 'Runtime log: %s\nError log: %s\nAccess log: %s\n' "$OUT_LOG" "$ERROR_LOG" "$ACCESS_LOG"
 }
 

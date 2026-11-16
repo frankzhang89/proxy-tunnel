@@ -4,6 +4,7 @@ import io.netty.channel.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import xzy.fz.handler.RelayHandler;
+import xzy.fz.monitor.Monitor;
 import xzy.fz.log.AccessLog;
 
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -76,6 +77,7 @@ public class DirectTunnelHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
         log.debug("Direct connection established to {}:{}", targetHost, targetPort);
+        Monitor.active(ctx.channel());
         onSuccess.run();
         switchToRelayMode(ctx);
     }

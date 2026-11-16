@@ -39,6 +39,10 @@ class StartupConfig {
                 print("SOCKS_PORT", socksPort);
                 print("UPSTREAM_HOST", upstream);
                 print("UPSTREAM_PORT", get(config, "upstreamPort"));
+                Object ui = get(config, "ui");
+                print("UI_ENABLED", get(ui, "enabled"));
+                String uiHost = (String) get(ui, "host");
+                print("UI_URL", "http://" + (uiHost.contains(":") ? "[" + uiHost + "]" : uiHost) + ":" + get(ui, "port"));
                 String accessLog = (String) get(config, "accessLogFile");
                 print("ACCESS_LOG", (boolean) get(config, "accessLogEnabled") && accessLog != null
                         && !accessLog.isBlank() ? Path.of(accessLog).toAbsolutePath().normalize() : "Disabled");

@@ -65,8 +65,34 @@ public record Config(
         String accessLogFile,
         boolean accessLogConsole,
         boolean accessLogEnabled,
-        NoProxyMatcher noProxyMatcher
+        NoProxyMatcher noProxyMatcher,
+        UiConfig ui
 ) {
+    public Config(
+        String listenHost,
+        int listenPort,
+        int socksPort,
+        boolean requireClientAuth,
+        String expectedClientAuthHeader,
+        String upstreamHost,
+        int upstreamPort,
+        boolean upstreamTls,
+        String expectedUpstreamAuthHeader,
+        int connectTimeoutMillis,
+        int httpMaxInitialBytes,
+        boolean pacEnabled,
+        String pacPath,
+        String pacHost,
+        String pacFile,
+        String serverName,
+        String logFile,
+        String accessLogFile,
+        boolean accessLogConsole,
+        boolean accessLogEnabled,
+        NoProxyMatcher noProxyMatcher) {
+        this(listenHost, listenPort, socksPort, requireClientAuth, expectedClientAuthHeader, upstreamHost, upstreamPort, upstreamTls, expectedUpstreamAuthHeader, connectTimeoutMillis, httpMaxInitialBytes, pacEnabled, pacPath, pacHost, pacFile, serverName, logFile, accessLogFile, accessLogConsole, accessLogEnabled, noProxyMatcher, UiConfig.defaults());
+    }
+
     private static final Logger log = LoggerFactory.getLogger(Config.class);
 
     /**

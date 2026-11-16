@@ -324,7 +324,7 @@ and `order=asc|desc`. Invalid values return 400. Omit `sort` for default time
 ordering. Existing `page` and `pageSize` parameters continue to work; size is
 capped at 200 and summaries remain global.
 
-Backend ordering/pagination tests are part of `mvn test`. The browser fixture
+Backend ordering/pagination tests run with `mvn test -DskipTests=false`. The browser fixture
 suite is `node nio-tunnel/src/test/web/connection-table.cjs` from the repository
 root, with Playwright available through `NODE_PATH` or `PLAYWRIGHT_MODULE`.
 Optionally set `CHROME_EXECUTABLE` to an installed Chrome executable; otherwise

@@ -88,6 +88,6 @@ output directory):
 
 ```bash
 mvn -f simple-tunnel/pom.xml clean verify -Dbase.export.path=/absolute/path/release-jars
-mvn -f nio-tunnel/pom.xml clean verify -Dbase.export.path=/absolute/path/release-jars
+mvn -f nio-tunnel/pom.xml clean verify -DskipTests=false -Dbase.export.path=/absolute/path/release-jars
 python scripts/package_release.py --jar-dir /absolute/path/release-jars --output-dir dist
 ```

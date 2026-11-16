@@ -13,6 +13,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <netty.version>4.2.5.Final</netty.version>
         <junit.version>5.11.3</junit.version>
+        <!-- Local packaging skips execution; use -DskipTests=false to run tests. -->
+        <skipTests>true</skipTests>
         <base.export.path>D:/opt/packaging</base.export.path>
     </properties>
 

@@ -64,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           for module in simple-tunnel nio-tunnel; do
-            mvn --batch-mode --no-transfer-progress -f "$module/pom.xml" clean verify \
+            mvn --batch-mode --no-transfer-progress -f "$module/pom.xml" clean verify -DskipTests=false \
               "-Dbase.export.path=$RUNNER_TEMP/release-jars"
           done
       - name: Package complete ZIP distributions

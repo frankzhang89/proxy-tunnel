@@ -232,6 +232,12 @@ class MonitorIntegrationTest {
                 java.net.http.HttpResponse.BodyHandlers.ofString());
         assertEquals(200, response.statusCode());
         assertFalse(response.body().isBlank());
+        if (path.equals("/api/snapshot")) {
+          assertEquals(
+              ProcessHandle.current().pid(),
+              com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject()
+                  .get("serverPid").getAsLong());
+        }
       }
     }
   }

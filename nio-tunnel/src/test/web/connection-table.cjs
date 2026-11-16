@@ -19,12 +19,13 @@ const resources=path.resolve(__dirname,'../../main/resources/web');
     let records=[...data];if(q.q)records=records.filter(r=>r.process.name.includes(q.q));
     records.sort((a,b)=>(q.sort==='pid'?a.process.pid-b.process.pid:q.sort==='uploadBps'?a.uploadBps-b.uploadBps:b.startedAt-a.startedAt)*(q.sort&&q.order==='desc'?-1:1));
     const size=Number(q.pageSize),pages=Math.max(1,Math.ceil(records.length/size)),number=Math.min(Number(q.page),pages);
-    return route.fulfill({contentType:'application/json',body:JSON.stringify({sampleTime:Date.now(),httpPort:8380,socksPort:1080,upstream:{host:'proxy.example.com',port:443},processStatus:'ready',summary:{activeClients:203,activeFlows:203,directFlows:0,upstreamFlows:203,uploadBytes:1048576,downloadBytes:2097152,uploadBps:1024,downloadBps:2048},pagination:{page:number,pageSize:size,total:records.length,pages},connections:records.slice((number-1)*size,number*size)})});
+    return route.fulfill({contentType:'application/json',body:JSON.stringify({serverPid:43210,sampleTime:Date.now(),httpPort:8380,socksPort:1080,upstream:{host:'proxy.example.com',port:443},processStatus:'ready',summary:{activeClients:203,activeFlows:203,directFlows:0,upstreamFlows:203,uploadBytes:1048576,downloadBytes:2097152,uploadBps:1024,downloadBps:2048},pagination:{page:number,pageSize:size,total:records.length,pages},connections:records.slice((number-1)*size,number*size)})});
    }
    const name=url.pathname==='/'?'index.html':url.pathname.slice(1);
    return route.fulfill({contentType:name.endsWith('.js')?'application/javascript':name.endsWith('.css')?'text/css':'text/html',body:fs.readFileSync(path.join(resources,name))});
   });
   await page.goto('http://monitor.test/');await page.locator('#rows tr').first().waitFor();
+  assert.equal(await page.locator('#ports').textContent(),'PID 43210 / HTTP :8380 / SOCKS :1080');
   assert.equal(await page.locator('thead th').count(),9);assert.equal(await page.locator('#rows tr').count(),50);
   assert.equal(await page.locator('th').nth(0).innerText(),'Process Name');assert.equal(await page.locator('th').nth(1).innerText(),'PID');
   const widths=()=>page.locator('#columns col').evaluateAll(cols=>cols.map(c=>parseFloat(c.style.width)));

@@ -185,6 +185,8 @@ public final class MonitorServer implements AutoCloseable {
     page = Math.min(page, pages);
     int from = (page - 1) * size;
     return Map.of(
+        "serverPid",
+        ProcessHandle.current().pid(),
         "sampleTime",
         s.sampleTime(),
         "uptimeMillis",

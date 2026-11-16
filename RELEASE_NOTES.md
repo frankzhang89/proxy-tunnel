@@ -39,6 +39,11 @@ each new release before creating its version tag.
 - **Read-only snapshot API:** `GET /api/snapshot` supports filtering, sorting,
   and pagination, exposes raw byte/B/s values and global upstream metadata, and
   keeps global summaries independent of the selected page or filter.
+- **Version-specific GitHub Release notes:** starting with v0.3.0, tagged builds
+  validate both Maven versions and require a unique, non-empty matching section
+  in this file, then publish that section as the Release body alongside the ZIPs.
+  Re-runs synchronize the same tag's body. Earlier versions still publish using
+  their existing behavior, without backfilling or replacing legacy Release text.
 
 ### Changed
 

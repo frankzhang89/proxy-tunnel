@@ -23,11 +23,16 @@ jobs:
           fetch-depth: 0
       - name: Check that the tagged commit belongs to master
         id: check
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master
           if git merge-base --is-ancestor "$(git rev-parse 'HEAD^{commit}')" refs/remotes/origin/master; then
+            python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+            python3 scripts/release_notes.py --tag "$RELEASE_TAG" \
+              --output "$RUNNER_TEMP/release-notes.md"
             echo 'eligible=true' >> "$GITHUB_OUTPUT"
           else
             echo 'eligible=false' >> "$GITHUB_OUTPUT"
@@ -42,6 +47,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Validate version and prepare this release's notes
+        id: notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python3 scripts/release_notes.py --tag "$RELEASE_TAG" --output "$RUNNER_TEMP/release-notes.md" --github-output "$GITHUB_OUTPUT"
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
@@ -64,12 +74,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
+          NOTES_ENABLED: ${{ steps.notes.outputs.notes_enabled }}
         shell: bash
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            if [[ "$NOTES_ENABLED" == 'true' ]]; then
+              gh release edit "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+            fi
             gh release upload "$RELEASE_TAG" dist/simple-tunnel.zip dist/nio-tunnel.zip --clobber
           else
-            gh release create "$RELEASE_TAG" dist/simple-tunnel.zip dist/nio-tunnel.zip \
-              --verify-tag --title "$RELEASE_TAG" --generate-notes
+            if [[ "$NOTES_ENABLED" == 'true' ]]; then
+              gh release create "$RELEASE_TAG" dist/simple-tunnel.zip dist/nio-tunnel.zip \
+                --verify-tag --title "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+            else
+              gh release create "$RELEASE_TAG" dist/simple-tunnel.zip dist/nio-tunnel.zip \
+                --verify-tag --title "$RELEASE_TAG" --generate-notes
+            fi
           fi

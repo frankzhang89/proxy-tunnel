@@ -3,18 +3,185 @@
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const resources=path.resolve(__dirname,'../../main/resources/web');
+
+async function testRefreshControl(page, {failNext, holdNext}) {
+  const key = 'nio-tunnel.refreshIntervalSeconds';
+  await page.addInitScript(() => {
+    const fetch = window.fetch;
+    window.snapshotRequests = 0;
+    window.fetch = (url, options) => {
+      if (url.startsWith('/api/snapshot?')) window.snapshotRequests++;
+      return fetch(url, options);
+    };
+  });
+  const start = new Date('2026-01-01T00:00:00Z');
+  await page.clock.install({time: start});
+  await page.clock.pauseAt(new Date(start.getTime() + 60000));
+  await page.reload();
+
+  const input = page.getByRole('combobox', {name: 'Refresh every'});
+  const list = page.getByRole('listbox', {name: 'Refresh intervals'});
+  const status = () => page.locator('#refresh').textContent();
+  const settled = () => page.locator('#connections[aria-busy="false"]').waitFor({state: 'attached'});
+  const requestCount = () => page.evaluate(() => window.snapshotRequests);
+  const snapshot = () => page.waitForResponse(response => new URL(response.url()).pathname === '/api/snapshot');
+  const noRequest = async (delay, advance = ms => page.clock.runFor(ms)) => {
+    const before = await requestCount();
+    await advance(delay);
+    assert.equal(await requestCount(), before);
+  };
+  const requestAfter = async (delay, expectedStatus = 200) => {
+    const before = await requestCount();
+    const response = snapshot();
+    await page.clock.runFor(delay);
+    assert.equal(await requestCount(), before + 1);
+    assert.equal((await response).status(), expectedStatus);
+    await settled();
+  };
+  const enter = async value => {
+    await input.fill(value);
+    await input.press('Enter');
+  };
+
+  await settled();
+  assert.equal(await input.inputValue(), '1');
+  assert.equal(await requestCount(), 1);
+  assert.match(await status(), /Updates every 1 s · .+/);
+
+  for (const seconds of [1, 5, 10, 20, 30]) {
+    await page.getByRole('button', {name: 'Show refresh intervals'}).click();
+    assert.deepEqual(await list.getByRole('option').allTextContents(), ['1 s', '5 s', '10 s', '20 s', '30 s']);
+    await list.getByRole('option', {name: seconds + ' s', exact: true}).click();
+    assert.equal(await input.inputValue(), String(seconds));
+    assert.equal(await input.getAttribute('aria-expanded'), 'false');
+    assert.match(await status(), new RegExp(`Updates every ${seconds} s`));
+    await noRequest(seconds * 1000 - 1);
+    await requestAfter(1);
+  }
+
+  await input.press('ArrowUp');
+  assert.equal(await input.getAttribute('aria-activedescendant'), 'refresh-option-30');
+  await input.press('ArrowDown');
+  await input.press('ArrowDown');
+  assert.equal(await input.getAttribute('aria-activedescendant'), 'refresh-option-5');
+  await input.press('Enter');
+  assert.equal(await input.inputValue(), '5');
+  await input.fill('007');
+  await input.press('Tab');
+  assert.equal(await input.inputValue(), '7');
+  await noRequest(6999);
+  await requestAfter(1);
+
+  for (const invalid of ['', '0', '-1', '1.5', ' 7', '7 ', '1e2', '+2', '１２']) {
+    await enter(invalid);
+    assert.equal(await input.getAttribute('aria-invalid'), 'true');
+    assert.match(await page.getByRole('alert').textContent(), /positive whole number/);
+    assert.match(await status(), /Updates every 7 s/);
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), key), '7');
+  }
+  await noRequest(6999);
+  await requestAfter(1);
+  await input.press('Escape');
+  assert.equal(await input.inputValue(), '7');
+  assert.equal(await input.getAttribute('aria-invalid'), null);
+
+  await page.reload();
+  await settled();
+  assert.equal(await input.inputValue(), '7');
+  await noRequest(6999);
+  await requestAfter(1);
+
+  await page.locator('#pause').click();
+  await enter('3');
+  assert.match(await status(), /Page updates paused · Every 3 s/);
+  await noRequest(6000);
+  for (const [id, param, value] of [['route', 'route', 'upstream'], ['protocol', 'protocol', 'http_connect']]) {
+    const filtered = snapshot();
+    await page.locator('#' + id).selectOption(value);
+    assert.equal(new URL((await filtered).url()).searchParams.get(param), value);
+    await settled();
+  }
+  const resumed = snapshot();
+  await page.locator('#pause').click();
+  await resumed;
+  await settled();
+  await noRequest(2999);
+  await requestAfter(1);
+
+  const setHidden = hidden => page.evaluate(hidden => {
+    Object.defineProperty(document, 'hidden', {configurable: true, value: hidden});
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+  await setHidden(true);
+  await noRequest(6000);
+  const visible = snapshot();
+  await setHidden(false);
+  await visible;
+  await settled();
+  await noRequest(2999);
+  await requestAfter(1);
+
+  await enter('1');
+  const release = holdNext();
+  const pending = snapshot();
+  await page.clock.runFor(1000);
+  await page.locator('#connections[aria-busy="true"]').waitFor({state: 'attached'});
+  await noRequest(2000);
+  release();
+  await pending;
+  await settled();
+  await noRequest(999);
+  await requestAfter(1);
+
+  failNext();
+  await requestAfter(1000, 503);
+  assert.match(await status(), /Updates interrupted/);
+  await noRequest(1999);
+  await requestAfter(1);
+  await enter('5');
+  failNext();
+  await requestAfter(5000, 503);
+  await noRequest(4999);
+  await requestAfter(1);
+
+  await enter('9007199254740993');
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), key), '9007199254740993');
+  await enter('2147484');
+  await noRequest(2147483647, ms => page.clock.fastForward(ms));
+  await noRequest(352);
+  await requestAfter(1);
+
+  await page.evaluate(key => localStorage.setItem(key, '0'), key);
+  await page.reload();
+  await settled();
+  assert.equal(await input.inputValue(), '1');
+  await page.addInitScript(() => {
+    for (const method of ['getItem', 'setItem']) {
+      Storage.prototype[method] = () => { throw new DOMException('Storage disabled', 'SecurityError'); };
+    }
+  });
+  await page.reload();
+  await settled();
+  assert.equal(await input.inputValue(), '1');
+  await enter('4');
+  await noRequest(3999);
+  await requestAfter(1);
+}
+
 (async()=>{
  const browser=await chromium.launch({headless:true,...(process.env.CHROME_EXECUTABLE?{executablePath:process.env.CHROME_EXECUTABLE}:{})});
  try{
   const page=await browser.newPage({viewport:{width:1560,height:1050}}),errors=[],requests=[];
   page.on('pageerror',e=>errors.push(e.message));
-  let failNext=false,delayPid=false;
+  let failNext=false,delayPid=false,heldSnapshot;
   const data=Array.from({length:203},(_,i)=>({id:''+(i+1),clientId:''+(i+1),source:{host:i===0?'2001:db8:abcd:abcd::1234':'127.0.0.1',port:50000+i},listener:{host:'127.0.0.1',port:8380},process:{pid:i+1,name:i===202?'extremely-long-process-name-for-ellipsis-verification.exe':'process-'+(i+1)+'.exe',status:'resolved'},targetHost:i===202?'very-long-target-hostname-for-ellipsis.example.com':'api.example.com',targetPort:443,protocol:'http_connect',route:'upstream',upstreamHost:'proxy.example.com',upstreamPort:443,state:'active',startedAt:Date.now()+i,uploadBytes:1048576,downloadBytes:2097152,uploadBps:i+1,downloadBps:2*(i+1)}));
   await page.route('http://monitor.test/**',async route=>{
    const url=new URL(route.request().url());
    if(url.pathname==='/api/snapshot'){
     const q=Object.fromEntries(url.searchParams);requests.push(q);
     if(failNext){failNext=false;return route.fulfill({status:503,body:''});}
+    const hold=heldSnapshot;heldSnapshot=undefined;
+    if(hold)await hold;
     if(delayPid&&q.sort==='pid')await new Promise(r=>setTimeout(r,400));
     let records=[...data];if(q.q)records=records.filter(r=>r.process.name.includes(q.q));
     records.sort((a,b)=>(q.sort==='pid'?a.process.pid-b.process.pid:q.sort==='uploadBps'?a.uploadBps-b.uploadBps:b.startedAt-a.startedAt)*(q.sort&&q.order==='desc'?-1:1));
@@ -57,7 +224,17 @@ const resources=path.resolve(__dirname,'../../main/resources/web');
   await page.locator('#pause').click();await page.waitForTimeout(1300);assert.deepEqual(await widths(),resized);
   await page.reload();await page.locator('#rows tr').first().waitFor();assert.deepEqual(await widths(),defaults);assert.equal(await page.locator('#page-size').inputValue(),'50');assert.equal(await page.locator('#units').inputValue(),'MiB');
   await page.locator('#units').selectOption('Auto');await page.screenshot({path:path.resolve(__dirname,'../../../target/monitor-table.png'),fullPage:true});
-  await page.setViewportSize({width:520,height:900});assert(await page.locator('.table-wrap').evaluate(n=>n.scrollWidth>n.clientWidth));const footer=await page.locator('footer').boundingBox();assert(footer.width<=520);assert(!/[\u4e00-\u9fff]/.test(await page.locator('body').textContent()));assert.deepEqual(errors,[]);
+  await page.setViewportSize({width:520,height:900});assert(await page.locator('.table-wrap').evaluate(n=>n.scrollWidth>n.clientWidth));const footer=await page.locator('footer').boundingBox();assert(footer.width<=520);assert(!/[\u4e00-\u9fff]/.test(await page.locator('body').textContent()));
   console.log('PASS: 9 sortable columns, keyboard, all resize handles, ellipsis, full paging choices, paused actions, stale responses, rollback, refresh reset, units, narrow layout.');
+  await testRefreshControl(page, {
+    failNext: () => { failNext = true; },
+    holdNext: () => {
+      let release;
+      heldSnapshot = new Promise(resolve => { release = resolve; });
+      return release;
+    }
+  });
+  assert.deepEqual(errors, []);
+  console.log('PASS: refresh presets, keyboard and direct entry, validation, persistence, request timing, pause, visibility, slow requests, failure backoff, long delays.');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1});

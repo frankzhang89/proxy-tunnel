@@ -223,7 +223,137 @@ function render(data) {
     detail(data.connections.find(r => r.id === state.selected));
 }
 
-let failures = 0, nextAttempt = 0;
+const refreshStorageKey = 'nio-tunnel.refreshIntervalSeconds';
+const maxTimerDelay = 2147483647n;
+let refreshSeconds = 1n;
+try {
+    refreshSeconds = parseRefreshSeconds(localStorage.getItem(refreshStorageKey)) || refreshSeconds;
+} catch (_) {
+}
+let failures = 0, nextAttempt = 0, refreshTimer;
+let refreshStatus = 'connecting';
+
+function parseRefreshSeconds(value) {
+    return value && !/[^0-9]/.test(value) ? BigInt(value) : 0n;
+}
+
+function showRefreshStatus(status = refreshStatus) {
+    refreshStatus = status;
+    const time = state.last ? new Date(state.last.sampleTime).toLocaleTimeString('en-US') : '—';
+    const text = {
+        connecting: `Connecting… · Every ${refreshSeconds} s`,
+        live: `● Updates every ${refreshSeconds} s · ${time}`,
+        paused: `Ⅱ Page updates paused · Every ${refreshSeconds} s · Last update ${time}`,
+        error: `Updates interrupted · Every ${refreshSeconds} s · Last update ${time}`
+    };
+    $('refresh').classList.toggle('error', status === 'error');
+    $('refresh').textContent = text[status];
+}
+
+function scheduleRefresh() {
+    clearTimeout(refreshTimer);
+    if (state.paused || document.hidden) return;
+
+    const interval = refreshSeconds * 1000n;
+    const backoff = BigInt(Math.max(0, nextAttempt - Date.now()));
+    const deadline = BigInt(Math.floor(performance.now())) + (interval > backoff ? interval : backoff);
+    function waitUntilDue() {
+        const remaining = deadline - BigInt(Math.floor(performance.now()));
+        if (remaining > 0n) {
+            refreshTimer = setTimeout(waitUntilDue, Number(remaining > maxTimerDelay ? maxTimerDelay : remaining));
+            return;
+        }
+        scheduleRefresh();
+        refresh();
+    }
+    waitUntilDue();
+}
+
+function initializeRefreshControl() {
+    const control = $('refresh-control');
+    const input = $('refresh-seconds');
+    const list = $('refresh-options');
+    const toggle = $('refresh-options-toggle');
+    const error = $('refresh-input-error');
+    const options = [...list.children];
+    let activeIndex = -1;
+
+    function showOptions(open, index = -1) {
+        activeIndex = index;
+        list.hidden = !open;
+        input.setAttribute('aria-expanded', open);
+        toggle.setAttribute('aria-expanded', open);
+        toggle.setAttribute('aria-label', open ? 'Hide refresh intervals' : 'Show refresh intervals');
+        for (const [i, option] of options.entries()) option.setAttribute('aria-selected', i === index);
+        if (index < 0) input.removeAttribute('aria-activedescendant');
+        else input.setAttribute('aria-activedescendant', options[index].id);
+    }
+
+    function showInputError(invalid) {
+        if (invalid) input.setAttribute('aria-invalid', 'true');
+        else input.removeAttribute('aria-invalid');
+        error.textContent = invalid ? 'Enter a positive whole number of seconds.' : '';
+    }
+
+    function commit(value) {
+        showOptions(false);
+        const seconds = parseRefreshSeconds(value);
+        showInputError(!seconds);
+        if (!seconds) return;
+        input.value = String(seconds);
+        if (seconds === refreshSeconds) return;
+        refreshSeconds = seconds;
+        try {
+            localStorage.setItem(refreshStorageKey, input.value);
+        } catch (_) {
+        }
+        showRefreshStatus();
+        scheduleRefresh();
+    }
+
+    input.value = String(refreshSeconds);
+    input.oninput = () => {
+        showOptions(false);
+        showInputError(false);
+    };
+    input.onkeydown = event => {
+        if (event.isComposing) return;
+        switch (event.key) {
+            case 'ArrowDown':
+            case 'ArrowUp': {
+                event.preventDefault();
+                const step = event.key === 'ArrowDown' ? 1 : -1;
+                const start = activeIndex < 0 && step < 0 ? 0 : activeIndex;
+                showOptions(true, (start + step + options.length) % options.length);
+                break;
+            }
+            case 'Enter':
+                event.preventDefault();
+                commit(activeIndex < 0 ? input.value : options[activeIndex].dataset.seconds);
+                break;
+            case 'Escape':
+                event.preventDefault();
+                input.value = String(refreshSeconds);
+                showInputError(false);
+                showOptions(false);
+                break;
+        }
+    };
+
+    // Keep the field focused until a pointer selection has been applied.
+    toggle.onmousedown = list.onmousedown = event => event.preventDefault();
+    toggle.onclick = () => {
+        input.focus();
+        showOptions(list.hidden);
+    };
+    list.onclick = event => {
+        const option = event.target.closest('[role="option"]');
+        if (option) commit(option.dataset.seconds);
+    };
+    control.addEventListener('focusout', event => {
+        if (!control.contains(event.relatedTarget)) commit(input.value);
+    });
+}
 
 function syncControls(restoreSearch = false) {
     $('page-size').value = state.query.pageSize;
@@ -254,8 +384,7 @@ async function refresh(manual = false) {
         syncControls();
         render(data);
         failures = 0;
-        $('refresh').className = 'refresh';
-        $('refresh').textContent = state.paused ? 'Ⅱ Page updates paused' : `● Updates every second · ${new Date(data.sampleTime).toLocaleTimeString('en-US')}`;
+        showRefreshStatus(state.paused ? 'paused' : 'live');
     } catch (error) {
         if (id !== state.requestId) return;
         state.query = {...state.confirmed};
@@ -263,8 +392,8 @@ async function refresh(manual = false) {
         if (state.last) render(state.last);
         failures++;
         nextAttempt = Date.now() + Math.min(10000, 1000 * 2 ** failures);
-        $('refresh').className = 'refresh error';
-        $('refresh').textContent = `Updates interrupted · Last update ${state.last ? new Date(state.last.sampleTime).toLocaleTimeString('en-US') : '—'}`;
+        showRefreshStatus('error');
+        scheduleRefresh();
     } finally {
         clearTimeout(timer);
         if (id === state.requestId) {
@@ -279,11 +408,14 @@ function setQuery(patch) {
     state.query = {...state.query, ...patch};
     nextAttempt = 0;
     syncControls();
+    scheduleRefresh();
     refresh(true);
 }
 
 $('address').textContent = location.host;
 initializeColumns();
+initializeRefreshControl();
+showRefreshStatus();
 $('units').value = state.unit;
 $('units').onchange = () => {
     state.unit = validUnits.includes($('units').value) ? $('units').value : 'Auto';
@@ -312,11 +444,12 @@ $('pause').onclick = () => {
             state.busy = false;
             $('connections').setAttribute('aria-busy', 'false');
         }
-        $('refresh').textContent = 'Ⅱ Page updates paused';
+        showRefreshStatus('paused');
     } else {
         nextAttempt = 0;
         refresh();
     }
+    scheduleRefresh();
 };
 $('prev').onclick = () => setQuery({page: state.query.page - 1});
 $('next').onclick = () => setQuery({page: state.query.page + 1});
@@ -325,6 +458,7 @@ document.addEventListener('visibilitychange', () => {
         nextAttempt = 0;
         refresh();
     }
+    scheduleRefresh();
 });
-setInterval(refresh, 1000);
+scheduleRefresh();
 refresh();

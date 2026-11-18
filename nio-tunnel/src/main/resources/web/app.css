@@ -39,7 +39,9 @@ header span {
     margin-left: auto;
     background: #edf9f2;
     padding: 6px 12px;
-    border-radius: 6px
+    border-radius: 6px;
+    min-width: 0;
+    overflow-wrap: anywhere
 }
 
 .refresh.error {
@@ -106,6 +108,7 @@ h3 {
 
 nav {
     display: flex;
+    align-items: flex-start;
     gap: 10px;
     padding: 18px;
     flex-wrap: wrap
@@ -287,10 +290,77 @@ footer button {
     margin: 6px 0
 }
 
-.unit-control {
+.unit-control, .refresh-control {
     display: flex;
     align-items: center;
     gap: 7px
+}
+
+.refresh-control {
+    flex-wrap: wrap;
+    color: #66758a
+}
+
+.refresh-combo {
+    position: relative;
+    display: flex
+}
+
+#refresh-seconds {
+    width: 64px;
+    min-width: 0;
+    border-radius: 6px 0 0 6px;
+    font-variant-numeric: tabular-nums
+}
+
+#refresh-options-toggle {
+    margin-left: -1px;
+    border-radius: 0 6px 6px 0
+}
+
+.refresh-combo :focus-visible {
+    outline: 2px solid #3879b8;
+    outline-offset: -2px
+}
+
+#refresh-options {
+    position: absolute;
+    z-index: 2;
+    top: 100%;
+    inset-inline: 0;
+    margin: 4px 0 0;
+    padding: 4px;
+    list-style: none;
+    background: white;
+    color: #263b56;
+    border: 1px solid #dce4ef;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(38, 59, 86, .12)
+}
+
+#refresh-options li {
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer
+}
+
+#refresh-options li:hover, #refresh-options li[aria-selected="true"] {
+    background: #edf3ff;
+    color: #2466db
+}
+
+#refresh-seconds[aria-invalid="true"] {
+    border-color: #b34c43
+}
+
+#refresh-input-error {
+    flex-basis: 100%;
+    font-size: 12px;
+    color: #a43e37
+}
+
+#refresh-input-error:empty {
+    display: none
 }
 
 .cards article {

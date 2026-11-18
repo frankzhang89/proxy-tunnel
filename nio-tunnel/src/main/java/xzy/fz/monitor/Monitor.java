@@ -23,6 +23,9 @@ public final class Monitor implements AutoCloseable {
       up = new AtomicLong(),
       down = new AtomicLong();
   private final long started;
+  private static final int TRAFFIC_HISTORY_LIMIT = 600;
+  private static final long TRAFFIC_HISTORY_MILLIS = TimeUnit.MINUTES.toMillis(10);
+  private final Deque<TrafficSample> trafficHistory = new ArrayDeque<>();
   private long previousNano, previousUp, previousDown;
   private final ScheduledExecutorService sampler =
       Executors.newSingleThreadScheduledExecutor(
@@ -208,6 +211,18 @@ public final class Monitor implements AutoCloseable {
       f.previousDown = d;
     }
     long totalUp = up.get(), totalDown = down.get();
+    double uploadBps = Math.max(0, totalUp - previousUp) / seconds;
+    double downloadBps = Math.max(0, totalDown - previousDown) / seconds;
+    if (snapshot != null) {
+      // A wall-clock correction must not leave duplicate or out-of-order chart timestamps.
+      while (!trafficHistory.isEmpty() && trafficHistory.getLast().sampleTime() >= wall)
+        trafficHistory.removeLast();
+      while (!trafficHistory.isEmpty()
+          && (trafficHistory.size() >= TRAFFIC_HISTORY_LIMIT
+              || trafficHistory.getFirst().sampleTime() <= wall - TRAFFIC_HISTORY_MILLIS))
+        trafficHistory.removeFirst();
+      trafficHistory.addLast(new TrafficSample(wall, uploadBps, downloadBps));
+    }
     snapshot =
         new Snapshot(
             wall,
@@ -224,9 +239,10 @@ public final class Monitor implements AutoCloseable {
                 upstream,
                 totalUp,
                 totalDown,
-                Math.max(0, totalUp - previousUp) / seconds,
-                Math.max(0, totalDown - previousDown) / seconds),
-            List.copyOf(rows));
+                uploadBps,
+                downloadBps),
+            List.copyOf(rows),
+            List.copyOf(trafficHistory));
     previousNano = now;
     previousUp = totalUp;
     previousDown = totalDown;
@@ -383,6 +399,8 @@ public final class Monitor implements AutoCloseable {
       double uploadBps,
       double downloadBps) {}
 
+  public record TrafficSample(long sampleTime, double uploadBps, double downloadBps) {}
+
   public record Snapshot(
       long sampleTime,
       long uptimeMillis,
@@ -391,5 +409,6 @@ public final class Monitor implements AutoCloseable {
       Endpoint upstream,
       String processStatus,
       Summary summary,
-      List<Connection> connections) {}
+      List<Connection> connections,
+      List<TrafficSample> trafficHistory) {}
 }

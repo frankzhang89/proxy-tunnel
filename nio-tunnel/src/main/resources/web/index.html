@@ -4,7 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>nio-tunnel Connection Monitor</title>
+    <link rel="stylesheet" href="/vendor/uplot-1.6.32/uPlot.min.css">
     <link rel="stylesheet" href="/app.css">
+    <script src="/vendor/uplot-1.6.32/uPlot.iife.min.js" defer></script>
+    <script src="/traffic-chart.js" defer></script>
     <script src="/app.js" defer></script>
 </head>
 <body>
@@ -27,6 +30,28 @@
             <h2 id="download" class="down">—</h2></article>
         <article><label>Transferred this session</label>
             <h3 id="total">—</h3><small>Includes upstream and direct traffic</small></article>
+    </section>
+    <section class="panel traffic-panel" aria-labelledby="traffic-title">
+        <div class="traffic-heading">
+            <h2 id="traffic-title">Traffic speed</h2>
+            <div id="traffic-ranges" role="group" aria-label="Traffic time range">
+                <button type="button" data-minutes="1" aria-pressed="true" class="selected">1 min</button>
+                <button type="button" data-minutes="5" aria-pressed="false">5 min</button>
+                <button type="button" data-minutes="10" aria-pressed="false">10 min</button>
+            </div>
+        </div>
+        <div class="traffic-legend">
+            <span class="up">↑ Upload</span>
+            <span class="down">↓ Download</span>
+        </div>
+        <div id="traffic-plot" class="traffic-plot">
+            <p id="traffic-empty">Waiting for traffic samples…</p>
+        </div>
+        <div id="traffic-tooltip" class="traffic-tooltip" hidden>
+            <time id="traffic-tooltip-time"></time>
+            <div class="up">↑ <span id="traffic-tooltip-up"></span></div>
+            <div class="down">↓ <span id="traffic-tooltip-down"></span></div>
+        </div>
     </section>
     <section class="panel">
         <nav>
@@ -59,7 +84,7 @@
                 <div class="refresh-combo">
                     <input id="refresh-seconds" type="text" inputmode="numeric" autocomplete="off" value="1"
                            role="combobox" aria-autocomplete="none" aria-expanded="false"
-                           aria-controls="refresh-options" aria-describedby="refresh-unit refresh-input-error">
+                           aria-controls="refresh-options" aria-describedby="refresh-unit">
                     <button id="refresh-options-toggle" type="button" tabindex="-1"
                             aria-label="Show refresh intervals" aria-expanded="false"
                             aria-controls="refresh-options">▾</button>
@@ -72,7 +97,6 @@
                     </ul>
                 </div>
                 <span id="refresh-unit">s</span>
-                <span id="refresh-input-error" role="alert"></span>
             </div>
             <button id="pause">Ⅱ Pause refresh</button>
         </nav>

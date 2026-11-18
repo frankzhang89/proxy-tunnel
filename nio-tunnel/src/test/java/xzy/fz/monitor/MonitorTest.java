@@ -75,6 +75,7 @@ class MonitorTest {
       nano.set(2_000_000_000L);
       m.sample();
       assertEquals(100, m.snapshot().summary().uploadBps());
+      assertEquals(List.of(new Monitor.TrafficSample(1000, 100, 50)), m.snapshot().trafficHistory());
       assertEquals(50, m.snapshot().connections().getFirst().downloadBps());
       nano.addAndGet(1_000_000_000L);
       m.sample();
@@ -87,6 +88,39 @@ class MonitorTest {
       m.sample();
       assertTrue(m.snapshot().connections().isEmpty());
       assertEquals(200, m.snapshot().summary().uploadBytes());
+    }
+  }
+
+  @Test
+  void trafficHistoryIsBoundedOrderedAndIndependentOfConnectionFilters() {
+    AtomicLong nano = new AtomicLong(), wall = new AtomicLong(1000);
+    try (Monitor monitor = new Monitor(config(8390, false), nano::get, wall::get)) {
+      assertTrue(monitor.snapshot().trafficHistory().isEmpty());
+      for (int i = 0; i < 610; i++) {
+        nano.addAndGet(500_000_000L);
+        wall.addAndGet(500);
+        monitor.sample();
+      }
+      var snapshot = monitor.snapshot();
+      var history = snapshot.trafficHistory();
+      assertEquals(600, history.size());
+      assertEquals(6500, history.getFirst().sampleTime());
+      assertEquals(new Monitor.TrafficSample(wall.get(), 0, 0), history.getLast());
+      assertFalse(MonitorServer.view(snapshot, Map.of()).containsKey("trafficHistory"));
+      assertEquals(history, MonitorServer.view(
+          snapshot, Map.of("traffic", List.of("1"), "route", List.of("direct")))
+          .get("trafficHistory"));
+
+      wall.addAndGet(600_000);
+      nano.addAndGet(600_000_000_000L);
+      monitor.sample();
+      assertEquals(List.of(new Monitor.TrafficSample(wall.get(), 0, 0)),
+          monitor.snapshot().trafficHistory());
+      wall.decrementAndGet();
+      monitor.sample();
+      assertEquals(List.of(new Monitor.TrafficSample(wall.get(), 0, 0)),
+          monitor.snapshot().trafficHistory());
+      assertEquals(600, snapshot.trafficHistory().size());
     }
   }
 

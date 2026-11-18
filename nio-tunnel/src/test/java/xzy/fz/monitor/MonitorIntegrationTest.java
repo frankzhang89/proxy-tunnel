@@ -224,7 +224,11 @@ class MonitorIntegrationTest {
     try (MonitorServer server = new MonitorServer(MonitorTest.config(port, false))) {
       server.start();
       var client = java.net.http.HttpClient.newHttpClient();
-      for (String path : new String[] {"/", "/app.css", "/app.js", "/api/snapshot"}) {
+      for (String path : new String[] {
+          "/", "/app.css", "/app.js", "/traffic-chart.js",
+          "/vendor/uplot-1.6.32/uPlot.iife.min.js", "/vendor/uplot-1.6.32/uPlot.min.css",
+          "/api/snapshot", "/api/snapshot?traffic=1"
+      }) {
         var response =
             client.send(
                 java.net.http.HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
@@ -232,11 +236,16 @@ class MonitorIntegrationTest {
                 java.net.http.HttpResponse.BodyHandlers.ofString());
         assertEquals(200, response.statusCode());
         assertFalse(response.body().isBlank());
-        if (path.equals("/api/snapshot")) {
-          assertEquals(
-              ProcessHandle.current().pid(),
-              com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject()
-                  .get("serverPid").getAsLong());
+        if (path.startsWith("/api/snapshot")) {
+          var snapshot = com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject();
+          assertEquals(ProcessHandle.current().pid(), snapshot.get("serverPid").getAsLong());
+          assertEquals(path.endsWith("traffic=1"), snapshot.has("trafficHistory"));
+          if (snapshot.has("trafficHistory")) assertTrue(snapshot.get("trafficHistory").isJsonArray());
+        } else if (path.endsWith(".js")) {
+          assertTrue(response.headers().firstValue("Content-Type").orElseThrow()
+              .startsWith("application/javascript"));
+        } else if (path.endsWith(".css")) {
+          assertTrue(response.headers().firstValue("Content-Type").orElseThrow().startsWith("text/css"));
         }
       }
     }

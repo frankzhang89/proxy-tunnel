@@ -297,7 +297,6 @@ footer button {
 }
 
 .refresh-control {
-    flex-wrap: wrap;
     color: #66758a
 }
 
@@ -349,18 +348,74 @@ footer button {
     color: #2466db
 }
 
-#refresh-seconds[aria-invalid="true"] {
-    border-color: #b34c43
+.traffic-panel {
+    --traffic-upload: #2466db;
+    --traffic-download: #158169;
+    margin-bottom: 20px;
+    padding: 14px 16px 10px
 }
 
-#refresh-input-error {
-    flex-basis: 100%;
-    font-size: 12px;
-    color: #a43e37
+.traffic-heading, #traffic-ranges, .traffic-legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px
 }
 
-#refresh-input-error:empty {
-    display: none
+.traffic-heading {
+    justify-content: space-between
+}
+
+.traffic-heading h2 {
+    font-size: 17px;
+    margin: 0
+}
+
+#traffic-ranges button {
+    padding: 5px 8px
+}
+
+.traffic-legend {
+    margin: 8px 0 2px;
+    gap: 16px
+}
+
+.traffic-panel .up {
+    color: var(--traffic-upload)
+}
+
+.traffic-panel .down {
+    color: var(--traffic-download)
+}
+
+.traffic-plot {
+    position: relative;
+    min-height: 210px
+}
+
+#traffic-empty {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    margin: 0;
+    text-align: center;
+    align-content: center;
+    pointer-events: none
+}
+
+.traffic-tooltip {
+    position: absolute;
+    z-index: 2;
+    padding: 6px 9px;
+    border: 1px solid #dce4ef;
+    border-radius: 6px;
+    background: white;
+    color: #263b56;
+    box-shadow: 0 4px 12px rgba(38, 59, 86, .12);
+    pointer-events: none;
+    white-space: nowrap;
+    font: 12px/1.5 "Segoe UI", sans-serif;
+    font-variant-numeric: tabular-nums
 }
 
 .cards article {

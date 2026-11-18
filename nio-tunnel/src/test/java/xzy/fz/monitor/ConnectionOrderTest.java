@@ -157,7 +157,8 @@ class ConnectionOrderTest {
         new Monitor.Endpoint("proxy.test", 443),
         "ready",
         new Monitor.Summary(4, 4, 0, 2, 2, 1000, 2000, 1, 2),
-        rows);
+        rows,
+        List.of());
   }
 
   @SuppressWarnings("unchecked")

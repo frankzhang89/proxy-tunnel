@@ -248,8 +248,10 @@ These settings follow the existing file/CLI precedence, e.g.
 `--ui.port=8391` or `--ui.enabled=false`. If the UI cannot bind, the proxy keeps
 running; the runtime log records whether the configured UI address is available.
 
-Statistics are sampled once per second, with normally up to two seconds of page
-latency. Upload means tunnel to upstream/direct target; download is the reverse.
+Statistics are sampled once per second. **Refresh every** controls how often
+the page fetches the current snapshot, with a default of 1 second. Pick a preset
+or enter a positive whole number of seconds. Upload means tunnel to
+upstream/direct target; download is the reverse.
 Counters observe successful Netty writes and received bytes near the outbound
 socket, including TLS/HTTP/proxy handshakes, excluding TCP/IP headers, retransmits,
 and the monitor's own traffic. Partially failed writes are not estimated. These
@@ -258,6 +260,13 @@ ended transfers, survive history eviction, and reset on restart. A client TCP
 connection can produce multiple HTTP transfer rows; WebSocket upgrades retain
 one row. Activity counts include connecting transfers. Filtering never changes
 global totals. Pause affects page refresh only. Closed rows show zero speed.
+
+**Traffic speed** shows global upload (blue) and download (green) over the last
+1, 5 or 10 minutes. Hover over a sample for its local time and both speeds.
+The chart shares the page refresh setting and retains one-second resolution
+even at longer refresh intervals. Pause freezes the displayed chart. On resume,
+the chart loads the available history. The server keeps up to 600 samples from
+the past 10 minutes in memory, starting fresh when it restarts.
 
 Windows uses JNA IP Helper tables; Linux uses `ss` (iproute2). Missing tools,
 permissions, namespaces/NAT, very short connections, or native loading failures
@@ -269,7 +278,9 @@ lines are exposed by the monitor. Newer JDKs may require
 The JSON interface is `GET /api/snapshot`, with `scope=active|recent|all`, literal
 `q` search, `route=all|upstream|direct`,
 `protocol=all|http|http_connect|socks4|socks5|websocket`, `page` and `pageSize`
-(default 50, maximum 200). Speeds use B/s and cumulative sizes use bytes.
+(default 50, maximum 200). Add `traffic=1` to include `trafficHistory`, ordered
+by `sampleTime` (epoch milliseconds), with `uploadBps` and `downloadBps` per
+sample. Speeds use B/s and cumulative sizes use bytes.
 
 ### Process name caching and display units
 

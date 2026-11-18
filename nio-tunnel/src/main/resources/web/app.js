@@ -130,10 +130,22 @@ const protocolNames = {
     websocket: 'WebSocket'
 };
 
-function bytes(n, speed = false) {
+function displayUnitIndex(n) {
     let index = state.unit === 'Auto' ? 0 : unitNames.indexOf(state.unit);
     if (state.unit === 'Auto') while (n / 1024 ** index >= 1024 && index < unitNames.length - 1) index++;
+    return index;
+}
+
+function bytes(n, speed = false) {
+    const index = displayUnitIndex(n);
     return `${(n / 1024 ** index).toFixed(index ? 2 : 0)} ${unitNames[index]}${speed ? '/s' : ''}`;
+}
+
+function formatTrafficTicks(ticks) {
+    return ticks.map(tick => {
+        const index = displayUnitIndex(tick);
+        return `${Number((tick / 1024 ** index).toPrecision(3))} ${unitNames[index]}/s`;
+    });
 }
 
 function endpoint(host, port) {
@@ -274,9 +286,10 @@ function initializeRefreshControl() {
     const input = $('refresh-seconds');
     const list = $('refresh-options');
     const toggle = $('refresh-options-toggle');
-    const error = $('refresh-input-error');
     const options = [...list.children];
     let activeIndex = -1;
+    let draft = String(refreshSeconds);
+    let selectionBeforeEdit;
 
     function showOptions(open, index = -1) {
         activeIndex = index;
@@ -289,19 +302,24 @@ function initializeRefreshControl() {
         else input.setAttribute('aria-activedescendant', options[index].id);
     }
 
-    function showInputError(invalid) {
-        if (invalid) input.setAttribute('aria-invalid', 'true');
-        else input.removeAttribute('aria-invalid');
-        error.textContent = invalid ? 'Enter a positive whole number of seconds.' : '';
+    function setDraft(value) {
+        draft = value;
+        input.value = value;
+    }
+
+    function isValidDraft(value) {
+        return value === '' || (!/[^0-9]/.test(value) && /[1-9]/.test(value));
+    }
+
+    function nextDraft(text, start, end) {
+        return input.value.slice(0, start) + text + input.value.slice(end);
     }
 
     function commit(value) {
         showOptions(false);
         const seconds = parseRefreshSeconds(value);
-        showInputError(!seconds);
-        if (!seconds) return;
-        input.value = String(seconds);
-        if (seconds === refreshSeconds) return;
+        setDraft(String(seconds || refreshSeconds));
+        if (!seconds || seconds === refreshSeconds) return;
         refreshSeconds = seconds;
         try {
             localStorage.setItem(refreshStorageKey, input.value);
@@ -311,11 +329,41 @@ function initializeRefreshControl() {
         scheduleRefresh();
     }
 
-    input.value = String(refreshSeconds);
-    input.oninput = () => {
+    setDraft(draft);
+    input.addEventListener('paste', event => {
+        const text = event.clipboardData?.getData('text/plain');
+        if (text != null && (!isValidDraft(text) || !isValidDraft(nextDraft(text, input.selectionStart, input.selectionEnd)))) {
+            event.preventDefault();
+        }
+    });
+    input.addEventListener('beforeinput', event => {
+        let {selectionStart: start, selectionEnd: end} = input;
+        selectionBeforeEdit = [start, end];
+        if (!event.cancelable) return;
+        let text = event.data;
+        if (event.inputType === 'deleteContentBackward') {
+            if (start === end) start = Math.max(0, start - 1);
+            text = '';
+        } else if (event.inputType === 'deleteContentForward') {
+            if (start === end) end++;
+            text = '';
+        } else if (event.inputType === 'deleteByCut') {
+            text = '';
+        }
+        if (text != null && !isValidDraft(nextDraft(text, start, end))) event.preventDefault();
+    });
+    input.addEventListener('input', () => {
+        if (!isValidDraft(input.value)) {
+            const [start, end] = selectionBeforeEdit || [input.selectionStart, input.selectionEnd];
+            input.value = draft;
+            input.setSelectionRange(start, end);
+            selectionBeforeEdit = null;
+            return;
+        }
+        draft = input.value;
+        selectionBeforeEdit = null;
         showOptions(false);
-        showInputError(false);
-    };
+    });
     input.onkeydown = event => {
         if (event.isComposing) return;
         switch (event.key) {
@@ -333,8 +381,7 @@ function initializeRefreshControl() {
                 break;
             case 'Escape':
                 event.preventDefault();
-                input.value = String(refreshSeconds);
-                showInputError(false);
+                setDraft(String(refreshSeconds));
                 showOptions(false);
                 break;
         }
@@ -375,6 +422,7 @@ async function refresh(manual = false) {
     try {
         const query = new URLSearchParams(requested);
         if (!requested.sort) query.delete('sort');
+        if (!state.paused) query.set('traffic', '1');
         const response = await fetch('/api/snapshot?' + query, {signal: controller.signal});
         if (!response.ok) throw Error(response.status);
         const data = await response.json();
@@ -383,6 +431,9 @@ async function refresh(manual = false) {
         state.confirmed = {...state.query};
         syncControls();
         render(data);
+        if (!state.paused && Array.isArray(data.trafficHistory)) {
+            trafficChart?.update(data.sampleTime, data.trafficHistory);
+        }
         failures = 0;
         showRefreshStatus(state.paused ? 'paused' : 'live');
     } catch (error) {
@@ -413,6 +464,9 @@ function setQuery(patch) {
 }
 
 $('address').textContent = location.host;
+const trafficChart = typeof createTrafficChart === 'function'
+    ? createTrafficChart(n => bytes(n, true), formatTrafficTicks)
+    : null;
 initializeColumns();
 initializeRefreshControl();
 showRefreshStatus();
@@ -424,6 +478,7 @@ $('units').onchange = () => {
     } catch (_) {
     }
     if (state.last) render(state.last);
+    trafficChart?.redraw();
 };
 for (const button of $('tabs').children) button.onclick = () => setQuery({scope: button.dataset.scope, page: 1});
 for (const id of ['route', 'protocol']) $(id).onchange = () => setQuery({[id]: $(id).value, page: 1});

@@ -112,6 +112,9 @@ public final class MonitorServer implements AutoCloseable {
               case "/" -> "index.html";
               case "/app.css" -> "app.css";
               case "/app.js" -> "app.js";
+              case "/traffic-chart.js" -> "traffic-chart.js";
+              case "/vendor/uplot-1.6.32/uPlot.iife.min.js" -> "vendor/uplot-1.6.32/uPlot.iife.min.js";
+              case "/vendor/uplot-1.6.32/uPlot.min.css" -> "vendor/uplot-1.6.32/uPlot.min.css";
               default -> null;
             };
         if (resource == null) {
@@ -184,7 +187,7 @@ public final class MonitorServer implements AutoCloseable {
     int pages = Math.max(1, (rows.size() + size - 1) / size);
     page = Math.min(page, pages);
     int from = (page - 1) * size;
-    return Map.of(
+    var result = Map.<String, Object>of(
         "serverPid",
         ProcessHandle.current().pid(),
         "sampleTime",
@@ -205,6 +208,10 @@ public final class MonitorServer implements AutoCloseable {
         Map.of("page", page, "pageSize", size, "total", rows.size(), "pages", pages),
         "connections",
         rows.subList(from, Math.min(from + size, rows.size())));
+    if (!value(q, "traffic", "").equals("1")) return result;
+    var withTraffic = new LinkedHashMap<>(result);
+    withTraffic.put("trafficHistory", s.trafficHistory());
+    return withTraffic;
   }
 
   static void respond(ChannelHandlerContext ctx, int code, String type, byte[] body) {

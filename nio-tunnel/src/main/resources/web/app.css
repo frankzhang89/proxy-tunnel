@@ -36,12 +36,73 @@ header span {
 }
 
 .refresh {
-    margin-left: auto;
     background: #edf9f2;
     padding: 6px 12px;
     border-radius: 6px;
     min-width: 0;
     overflow-wrap: anywhere
+}
+
+.header-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px 18px;
+    margin-left: auto;
+    min-width: 0;
+    position: relative;
+    z-index: 10
+}
+
+.header-controls .refresh-control {
+    flex-shrink: 0
+}
+
+.speed-unit-control {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer
+}
+
+#speed-unit {
+    appearance: none;
+    position: relative;
+    flex-shrink: 0;
+    width: 42px;
+    height: 24px;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: #8795a5;
+    cursor: pointer
+}
+
+#speed-unit::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: white
+}
+
+#speed-unit:checked {
+    background: #13ce66
+}
+
+#speed-unit:checked::after {
+    left: 21px
+}
+
+#speed-unit:focus-visible {
+    outline: 2px solid #3879b8;
+    outline-offset: 3px
 }
 
 .refresh.error {
@@ -254,6 +315,12 @@ footer button {
 
     header {
         flex-wrap: wrap
+    }
+
+    .header-controls {
+        width: 100%;
+        justify-content: flex-start;
+        margin-left: 0
     }
 
     .heading {

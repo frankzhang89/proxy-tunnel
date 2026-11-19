@@ -299,13 +299,27 @@ direct transfers. `direct`/`upstream` route labels remain in the table. Snapshot
 JSON adds a top-level `upstream` object (`host`, `port`), retaining the per-record
 fields for compatibility.
 
-The single **Units** selector applies to all speeds and byte totals, including
-row details. **Auto** uses powers of 1024 up to GiB; B, KiB, MiB and GiB force a
-fixed unit (with `/s` appended for speeds). Bytes are integers; larger units use
-two decimal places. The browser remembers the selection when local storage is
-available. Unit changes work while refresh is paused and never affect raw JSON
-counters or server-side sampling. Times use English formatting in the browser's
-local timezone. Process names and addresses are displayed as supplied.
+The **Units** selector applies to speeds and byte totals, including row details.
+The adjacent **byte/s / bit/s** switch changes speeds only: upload/download cards,
+table speeds, chart axis labels and hover values. It defaults to byte/s. In bit/s
+mode, rates are multiplied by eight and unit labels change from B, KiB, MiB, GiB
+to b, kb, mb, gb. Both modes deliberately use powers of **1024**, including the
+lowercase bit labels: 1024 B/s is 1.00 KiB/s or 8.00 kb/s in Auto mode.
+
+**Auto** chooses the magnitude after conversion; fixed units preserve their
+magnitude when switching modes. Base units are integers; larger units use two
+decimal places. **Transferred this session** and connection-detail byte totals
+always retain B/KiB/MiB/GiB units and are unchanged by the speed switch.
+The browser remembers the magnitude (`nio-tunnel.displayUnit`) and speed mode
+(`nio-tunnel.speedUnit`: `byte` or `bit`) when local storage is available. Invalid
+or missing speed modes fall back to byte/s. Unit changes also work while paused,
+without fetching data or resetting the refresh timer, and never change raw JSON,
+chart samples, server-side sampling or speed sorting.
+
+The refresh interval control is in the header, before the update status and
+address; its presets, custom input and keyboard controls remain available.
+Times use English formatting in the browser's local timezone. Process names and
+addresses are displayed as supplied.
 
 ### Connection table controls
 

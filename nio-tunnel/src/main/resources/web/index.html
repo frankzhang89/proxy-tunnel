@@ -11,9 +11,31 @@
     <script src="/app.js" defer></script>
 </head>
 <body>
-<header><b class="logo">N</b><strong>nio-tunnel</strong><span>Connection Monitor</span><span id="refresh"
-                                                                                             class="refresh">Connecting…</span><small
-        id="address"></small></header>
+<header><b class="logo">N</b><strong>nio-tunnel</strong><span>Connection Monitor</span>
+    <div class="header-controls">
+        <div id="refresh-control" class="refresh-control">
+            <label for="refresh-seconds">Refresh every</label>
+            <div class="refresh-combo">
+                <input id="refresh-seconds" type="text" inputmode="numeric" autocomplete="off" value="1"
+                       role="combobox" aria-autocomplete="none" aria-expanded="false"
+                       aria-controls="refresh-options" aria-describedby="refresh-unit">
+                <button id="refresh-options-toggle" type="button" tabindex="-1"
+                        aria-label="Show refresh intervals" aria-expanded="false"
+                        aria-controls="refresh-options">▾</button>
+                <ul id="refresh-options" role="listbox" aria-label="Refresh intervals" hidden>
+                    <li id="refresh-option-1" role="option" data-seconds="1" aria-selected="false">1 s</li>
+                    <li id="refresh-option-5" role="option" data-seconds="5" aria-selected="false">5 s</li>
+                    <li id="refresh-option-10" role="option" data-seconds="10" aria-selected="false">10 s</li>
+                    <li id="refresh-option-20" role="option" data-seconds="20" aria-selected="false">20 s</li>
+                    <li id="refresh-option-30" role="option" data-seconds="30" aria-selected="false">30 s</li>
+                </ul>
+            </div>
+            <span id="refresh-unit">s</span>
+        </div>
+        <span id="refresh" class="refresh">Connecting…</span>
+        <small id="address"></small>
+    </div>
+</header>
 <main>
     <section class="heading">
         <div><h1>Connections &amp; Traffic</h1>
@@ -74,30 +96,16 @@
             <option value="websocket">WebSocket</option>
         </select><label class="unit-control" for="units">Units <select id="units">
             <option value="Auto">Auto</option>
-            <option>B</option>
-            <option>KiB</option>
-            <option>MiB</option>
-            <option>GiB</option>
+            <option value="B">B</option>
+            <option value="KiB">KiB</option>
+            <option value="MiB">MiB</option>
+            <option value="GiB">GiB</option>
         </select></label>
-            <div id="refresh-control" class="refresh-control">
-                <label for="refresh-seconds">Refresh every</label>
-                <div class="refresh-combo">
-                    <input id="refresh-seconds" type="text" inputmode="numeric" autocomplete="off" value="1"
-                           role="combobox" aria-autocomplete="none" aria-expanded="false"
-                           aria-controls="refresh-options" aria-describedby="refresh-unit">
-                    <button id="refresh-options-toggle" type="button" tabindex="-1"
-                            aria-label="Show refresh intervals" aria-expanded="false"
-                            aria-controls="refresh-options">▾</button>
-                    <ul id="refresh-options" role="listbox" aria-label="Refresh intervals" hidden>
-                        <li id="refresh-option-1" role="option" data-seconds="1" aria-selected="false">1 s</li>
-                        <li id="refresh-option-5" role="option" data-seconds="5" aria-selected="false">5 s</li>
-                        <li id="refresh-option-10" role="option" data-seconds="10" aria-selected="false">10 s</li>
-                        <li id="refresh-option-20" role="option" data-seconds="20" aria-selected="false">20 s</li>
-                        <li id="refresh-option-30" role="option" data-seconds="30" aria-selected="false">30 s</li>
-                    </ul>
-                </div>
-                <span id="refresh-unit">s</span>
-            </div>
+            <label class="speed-unit-control">
+                <span>byte/s</span>
+                <input id="speed-unit" type="checkbox" role="switch" aria-label="Use bit/s for speeds">
+                <span>bit/s</span>
+            </label>
             <button id="pause">Ⅱ Pause refresh</button>
         </nav>
         <div class="table-wrap">

@@ -3,6 +3,13 @@ const $ = id => document.getElementById(id);
 const unitNames = ['B', 'KiB', 'MiB', 'GiB'];
 const validUnits = ['Auto', ...unitNames];
 const unitStorageKey = 'nio-tunnel.displayUnit';
+const bitUnitNames = ['b', 'kb', 'mb', 'gb'];
+const speedUnitStorageKey = 'nio-tunnel.speedUnit';
+let savedSpeedUnit = 'byte';
+try {
+    if (localStorage.getItem(speedUnitStorageKey) === 'bit') savedSpeedUnit = 'bit';
+} catch (_) {
+}
 let savedUnit = 'Auto';
 try {
     const saved = localStorage.getItem(unitStorageKey);
@@ -28,6 +35,7 @@ const state = {
     pages: 1,
     last: null,
     unit: savedUnit,
+    speedUnit: savedSpeedUnit,
     requestId: 0,
     request: null
 };
@@ -136,15 +144,24 @@ function displayUnitIndex(n) {
     return index;
 }
 
-function bytes(n, speed = false) {
+function bytes(n) {
     const index = displayUnitIndex(n);
-    return `${(n / 1024 ** index).toFixed(index ? 2 : 0)} ${unitNames[index]}${speed ? '/s' : ''}`;
+    return `${(n / 1024 ** index).toFixed(index ? 2 : 0)} ${unitNames[index]}`;
+}
+
+function speed(n) {
+    if (state.speedUnit === 'bit') n *= 8;
+    const index = displayUnitIndex(n);
+    const names = state.speedUnit === 'bit' ? bitUnitNames : unitNames;
+    return `${(n / 1024 ** index).toFixed(index ? 2 : 0)} ${names[index]}/s`;
 }
 
 function formatTrafficTicks(ticks) {
     return ticks.map(tick => {
+        if (state.speedUnit === 'bit') tick *= 8;
         const index = displayUnitIndex(tick);
-        return `${Number((tick / 1024 ** index).toPrecision(3))} ${unitNames[index]}/s`;
+        const names = state.speedUnit === 'bit' ? bitUnitNames : unitNames;
+        return `${Number((tick / 1024 ** index).toPrecision(3))} ${names[index]}/s`;
     });
 }
 
@@ -196,8 +213,8 @@ function render(data) {
     const s = data.summary;
     $('active').textContent = `${s.activeClients} / ${s.activeFlows}`;
     $('routes').textContent = `upstream ${s.upstreamFlows} · direct ${s.directFlows}`;
-    $('upload').textContent = bytes(s.uploadBps, true);
-    $('download').textContent = bytes(s.downloadBps, true);
+    $('upload').textContent = speed(s.uploadBps);
+    $('download').textContent = speed(s.downloadBps);
     $('total').textContent = `↑ ${bytes(s.uploadBytes)}  ↓ ${bytes(s.downloadBytes)}`;
     $('ports').textContent = `PID ${data.serverPid ?? '—'} / HTTP :${data.httpPort} / SOCKS :${data.socksPort}`;
     $('upstream').textContent = data.upstream ? `Upstream ${endpoint(data.upstream.host, data.upstream.port)}` : 'Upstream —';
@@ -215,8 +232,8 @@ function render(data) {
         cell(tr, protocolNames[r.protocol] || r.protocol);
         cell(tr, endpoint(r.targetHost, r.targetPort));
         cell(tr, '').replaceChildren(Object.assign(node('span', r.route, `cell-text badge ${r.route}`), {title: r.route}));
-        cell(tr, bytes(r.uploadBps, true), null, 'up numeric');
-        cell(tr, bytes(r.downloadBps, true), null, 'down numeric');
+        cell(tr, speed(r.uploadBps), null, 'up numeric');
+        cell(tr, speed(r.downloadBps), null, 'down numeric');
         cell(tr, '').replaceChildren(Object.assign(node('span', statusNames[r.state] || r.state, `cell-text badge ${r.state}`), {title: statusNames[r.state] || r.state}));
         tr.onclick = () => {
             state.selected = r.id;
@@ -465,11 +482,30 @@ function setQuery(patch) {
 
 $('address').textContent = location.host;
 const trafficChart = typeof createTrafficChart === 'function'
-    ? createTrafficChart(n => bytes(n, true), formatTrafficTicks)
+    ? createTrafficChart(speed, formatTrafficTicks)
     : null;
 initializeColumns();
 initializeRefreshControl();
 showRefreshStatus();
+// Option values remain the original byte units so saved magnitudes stay compatible.
+function syncSpeedUnitControl() {
+    $('speed-unit').checked = state.speedUnit === 'bit';
+    const names = state.speedUnit === 'bit' ? bitUnitNames : unitNames;
+    for (const option of $('units').options) {
+        if (option.value !== 'Auto') option.textContent = names[unitNames.indexOf(option.value)];
+    }
+}
+syncSpeedUnitControl();
+$('speed-unit').onchange = () => {
+    state.speedUnit = $('speed-unit').checked ? 'bit' : 'byte';
+    try {
+        localStorage.setItem(speedUnitStorageKey, state.speedUnit);
+    } catch (_) {
+    }
+    syncSpeedUnitControl();
+    if (state.last) render(state.last);
+    trafficChart?.redraw();
+};
 $('units').value = state.unit;
 $('units').onchange = () => {
     state.unit = validUnits.includes($('units').value) ? $('units').value : 'Auto';

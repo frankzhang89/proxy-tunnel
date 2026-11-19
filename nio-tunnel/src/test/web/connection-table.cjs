@@ -178,16 +178,19 @@ async function testRefreshControl(page, {failNext, holdNext}) {
   await settled();
   assert.equal(await input.inputValue(), '1');
   await page.addInitScript(() => {
+    if (!new URL(location.href).searchParams.has('storageDisabled')) return;
     for (const method of ['getItem', 'setItem']) {
       Storage.prototype[method] = () => { throw new DOMException('Storage disabled', 'SecurityError'); };
     }
   });
-  await page.reload();
+  await page.goto('http://monitor.test/?storageDisabled=1');
   await settled();
   assert.equal(await input.inputValue(), '1');
   await enter('4');
   await noRequest(3999);
   await requestAfter(1);
+  await page.goto('http://monitor.test/');
+  await settled();
 }
 
 async function testTrafficChart(page, setSampleTime) {
@@ -374,6 +377,11 @@ async function testTrafficChart(page, setSampleTime) {
     }
   });
   await testTrafficChart(page, time => { trafficSampleTime = time; });
+  await require('./speed-units.cjs')(page, {requests, holdNext: () => {
+    let release;
+    heldSnapshot = new Promise(resolve => { release = resolve; });
+    return release;
+  }});
   assert.deepEqual(errors, []);
   console.log('PASS: refresh presets, keyboard and direct entry, validation, persistence, request timing, pause, visibility, slow requests, failure backoff, long delays.');
   console.log('PASS: traffic ranges, colors, sampled hover values, units, gaps, narrow layout, 30 s refresh and pause/resume.');
